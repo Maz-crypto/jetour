@@ -1,6 +1,6 @@
 import sqlite3
 
-conn = sqlite3.connect('bot.db', check_same_thread=False)
+conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
 
 def init_db():
@@ -85,5 +85,6 @@ def get_setting(key):
 def set_setting(key, value):
     cursor.execute("UPDATE settings SET value = ? WHERE key = ?", (str(value), key))
     conn.commit()
+
 
 init_db()
