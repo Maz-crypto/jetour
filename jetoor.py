@@ -1,17 +1,27 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters, Application
 from database import init_db, cursor, conn, get_setting, set_setting
 from datetime import datetime, timedelta
 import logging
-import os  # ✅ جديد
+import os
+import asyncio
 
-# ✅ قراءة المتغيرات من البيئة (بدون config.py)
+# ✅ قراءة المتغيرات من البيئة
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMINS = [int(x.strip()) for x in os.environ["ADMINS"].split(",") if x.strip()]
+PORT = int(os.environ.get("PORT", 8000))
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # اختياري: https://your-app.onrender.com
 
 init_db()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# ---------------- ERROR HANDLER ----------------
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(f"Exception while handling an update: {context.error}")
+
+
 # ---------------- MENUS ----------------
 def user_menu():
     return InlineKeyboardMarkup([
@@ -34,8 +44,11 @@ def admin_menu():
     ])
 
 def confirm_menu(yes="✅ نعم", no="❌ لا", data_yes="confirm_yes", data_no="confirm_no"):
-    return InlineKeyboardMarkup([[InlineKeyboardButton(yes, callback_data=data_yes),
-                                   InlineKeyboardButton(no, callback_data=data_no)]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(yes, callback_data=data_yes),
+         InlineKeyboardButton(no, callback_data=data_no)]
+    ])
+
 
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,10 +57,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ref = int(args[0]) if args and args[0].isdigit() else None
     if ref == user.id:
         ref = None
-    cursor.execute(
-        "INSERT OR IGNORE INTO users (telegram_id, username, referrer_id) VALUES (%s,%s,%s)",
-        (user.id, user.username, ref)
-    )
+    
+    # ✅ PostgreSQL: INSERT ... ON CONFLICT DO NOTHING
+    cursor.execute("""
+        INSERT INTO users (telegram_id, username, referrer_id)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (telegram_id) DO NOTHING
+    """, (user.id, user.username, ref))
     conn.commit()
 
     price = get_setting("subscription_price")
@@ -61,6 +77,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=user_menu()
     )
 
+
 ## ---------------- CALLBACKS ----------------
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -69,7 +86,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---------- USER ----------
     if q.data == "subscribe":
-        cursor.execute("SELECT id,name,barcode FROM payment_methods")
+        cursor.execute("SELECT id, name, barcode FROM payment_methods")
         methods = cursor.fetchall()
         if not methods:
             await q.message.reply_text("💳 لا توجد طرق دفع متاحة. تواصل مع الدعم.")
@@ -82,7 +99,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method_id = int(q.data.split("_")[1])
         context.user_data["awaiting_payment"] = True
         context.user_data["payment_method_id"] = method_id
-        cursor.execute("SELECT name,barcode FROM payment_methods WHERE id=%s", (method_id,))
+        cursor.execute("SELECT name, barcode FROM payment_methods WHERE id=%s", (method_id,))
         name, barcode = cursor.fetchone()
         await q.message.reply_text(
             f"💵 أرسل **صورة إشعار الدفع** (لقطة من تطبيق الدفع)\n"
@@ -99,7 +116,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text("❌ يجب أن تكون مشتركًا لتفعيل رابط الإحالة.")
             return
         reward = get_setting("referral_reward")
-        link = f"https://t.me/news_acc_bot?start={uid}"  # ✅ تم التصحيح: لا مسافة
+        link = f"https://t.me/news_acc_bot?start={uid}"  # ✅ إزالة المسافة
         await q.message.reply_text(
             f"🔗 رابطك:\n{link}\n💰 العمولة: {reward}$",
             disable_web_page_preview=True
@@ -172,12 +189,11 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (uid,))
         bal = cursor.fetchone()[0]
 
-            # ✅ حفظ نوع الطريقة (sham أو usdt)
         method_type = "sham" if method == "sham" else "usdt"
         cursor.execute("""
-                INSERT INTO withdrawals (user_id, amount, sham_cash_link, method, status) 
-                VALUES (%s,%s,%s,%s, 'PENDING')
-            """, (uid, bal, data, method_type))
+            INSERT INTO withdrawals (user_id, amount, sham_cash_link, method, status) 
+            VALUES (%s, %s, %s, %s, 'PENDING')
+        """, (uid, bal, data, method_type))
 
         conn.commit()
         wid = cursor.lastrowid
@@ -228,7 +244,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------- ADMIN ----------
     if uid in ADMINS:
         if q.data == "admin_payments":
-            cursor.execute("SELECT id,user_id,amount,proof FROM payments WHERE status='PENDING'")
+            cursor.execute("SELECT id, user_id, amount, proof FROM payments WHERE status='PENDING'")
             rows = cursor.fetchall()
             if not rows:
                 await q.message.reply_text("📭 لا توجد طلبات.")
@@ -263,9 +279,8 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # ✅ --- عرض طلبات السحب مع تمييز الطريقة ---
-        # ✅ --- عرض طلبات السحب مع تمييز الطريقة ---
         elif q.data == "admin_withdraws":
-            cursor.execute("SELECT id,user_id,amount,sham_cash_link,method FROM withdrawals WHERE status='PENDING'")
+            cursor.execute("SELECT id, user_id, amount, sham_cash_link, method FROM withdrawals WHERE status='PENDING'")
             rows = cursor.fetchall()
             if not rows:
                 await q.message.reply_text("📭 لا توجد طلبات سحب.")
@@ -274,7 +289,6 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (u,))
                 bal = cursor.fetchone()[0]
                 
-                # ✅ تحديد الطريقة حسب اختيار المستخدم
                 method = "شام كاش" if method_type == "sham" else "USDT (BEP20)" if method_type == "usdt" else "غير معروف"
                 
                 await q.message.reply_text(
@@ -339,14 +353,14 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(u, "❌ تم إلغاء طلب سحب أرباحك. تواصل مع الدعم للمزيد.")
             except:
                 pass
-            await q.message.reply_text("✅ تم إلغاء الطلب.")
+            await q.message.reply_text("✅ تم الإلغاء.")
             return
 
         elif q.data.startswith("pay_"):
             wid = int(q.data.split("_")[1])
             context.user_data["pay_wid"] = wid
             await q.message.reply_text("🔢 أدخل رقم العملية:")
-            return  # ← لا تنسَ هذا
+            return
 
         elif q.data == "admin_settings":
             p = get_setting("subscription_price")
@@ -386,7 +400,6 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cursor.execute("SELECT id, name FROM payment_methods")
             methods = cursor.fetchall()
             
-            # ✅ الزر يظهر دائمًا — حتى لو لم تكن هناك طرق
             buttons = [[InlineKeyboardButton("➕ إضافة طريقة دفع", callback_data="add_payment")]]
             
             for m_id, name in methods:
@@ -411,7 +424,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif q.data == "channel_links":
-            cursor.execute("SELECT id,link FROM channel_links")
+            cursor.execute("SELECT id, link FROM channel_links")
             links = cursor.fetchall()
             buttons = [[InlineKeyboardButton("➕ إضافة روابط", callback_data="add_links_bulk")]]
             for lid, link in links:
@@ -435,7 +448,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             name, barcode = context.user_data.pop("tmp_payment")
             try:
-                cursor.execute("INSERT INTO payment_methods (name, barcode) VALUES (%s,%s)", (name, barcode))
+                cursor.execute("INSERT INTO payment_methods (name, barcode) VALUES (%s, %s)", (name, barcode))
                 conn.commit()
                 await q.message.edit_text("✅ تم الإضافة بنجاح!")
             except Exception as e:
@@ -478,25 +491,21 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text("أدخل الاسم الجديد:")
             return
 
-
-         # ✅ --- إرسال رسالة لمستخدم محدد ---
         elif q.data == "send_to_user":
             context.user_data["awaiting_user_id"] = True
             await q.message.reply_text("👤 أرسل معرف المستخدم (ID):")
             return
-        
 
         elif q.data == "cancel":
             keys = ["add_payment", "awaiting_payment_link", "new_payment_name", "tmp_payment", "edit", 
                     "expecting_links", "withdraw_method", "withdraw_amount", 
                     "withdraw_data_temp", "withdraw_method_temp",
-                    # ✅ أضف هذين المتغيرين:
                     "awaiting_user_id", "target_user_id"]
             for k in keys:
                 context.user_data.pop(k, None)
             await q.message.reply_text("❌ تم الإلغاء.")
             return
-        
+
 
 # ---------------- MESSAGES ----------------
 async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -506,7 +515,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text.strip() if update.message.text else ""
 
-        # ✅ --- 1. إدخال معرف المستخدم ---
+    # ✅ --- 1. إدخال معرف المستخدم ---
     if context.user_data.get("awaiting_user_id") and uid in ADMINS:
         try:
             target_id = int(text.strip())
@@ -592,15 +601,13 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.edit_text("❌ بيانات مفقودة.")
             return
 
-        # جلب الرصيد
         cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (uid,))
         bal = cursor.fetchone()[0]
 
-        # ✅ حفظ الطلب
         cursor.execute("""
-            INSERT INTO withdrawals (user_id, amount, sham_cash_link, status) 
-            VALUES (%s,%s,%s, 'PENDING')
-        """, (uid, bal, data))
+            INSERT INTO withdrawals (user_id, amount, sham_cash_link, method, status) 
+            VALUES (%s, %s, %s, %s, 'PENDING')
+        """, (uid, bal, data, method))
         conn.commit()
         wid = cursor.lastrowid
 
@@ -609,7 +616,6 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await q.message.edit_text(f"✅ تم إرسال طلب السحب #{wid} للأدمن.")
 
-        # إشعار الأدمن
         method_text = "شام كاش" if method == "sham" else "USDT (BEP20)"
         for admin in ADMINS:
             try:
@@ -661,7 +667,12 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         added = 0
         for link in links:
             try:
-                cursor.execute("INSERT OR IGNORE INTO channel_links (link) VALUES (%s)", (link,))
+                # ✅ PostgreSQL: ON CONFLICT DO NOTHING
+                cursor.execute("""
+                    INSERT INTO channel_links (link)
+                    VALUES (%s)
+                    ON CONFLICT (link) DO NOTHING
+                """, (link,))
                 added += 1
             except Exception as e:
                 logger.error(f"فشل إدخال الرابط: {e}")
@@ -680,7 +691,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_id = update.message.photo[-1].file_id
         cursor.execute("""
             INSERT INTO payments (user_id, amount, proof, status, payment_method_id)
-            VALUES (%s,%s,%s, 'PENDING', %s)
+            VALUES (%s, %s, %s, 'PENDING', %s)
         """, (uid, price, file_id, method_id))
         conn.commit()
         pid = cursor.lastrowid
@@ -772,7 +783,6 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("approve_pid", None)
             return
 
-    # ✅ --- معالجة رقم عملية السحب (يجب أن تكون في الأعلى) ---
     # --- 7. صرف السحب (يُصفّر الرصيد) ---
     if "pay_wid" in context.user_data and uid in ADMINS:
         wid = context.user_data["pay_wid"]
@@ -784,7 +794,6 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         u, amt, data, method_type = row
 
-        # ✅ تحديد الطريقة حسب اختيار المستخدم
         method = "شام كاش" if method_type == "sham" else "USDT (BEP20)" if method_type == "usdt" else "غير معروف"
 
         cursor.execute("UPDATE users SET referral_balance = 0 WHERE telegram_id=%s", (u,))
@@ -807,6 +816,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ تم صرف {amt}$ لـ {u}.")
         context.user_data.pop("pay_wid", None)
         return
+
     # --- باقي المعالجات ---
     if "edit" in context.user_data and uid in ADMINS:
         try:
@@ -847,9 +857,13 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ تم الإرسال.")
         return
 
+
 # ---------------- MAIN ----------------
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # ✅ أضف error handler
+    app.add_error_handler(error_handler)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", lambda u, c: 
@@ -859,9 +873,20 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, messages))
 
     logger.info("✅ البوت جاهز...")
-    app.run_polling(drop_pending_updates=True)
+
+    # ✅ تشغيل آمن مع إعادة محاولة عند الخطأ
+    try:
+        app.run_polling(
+            drop_pending_updates=True,
+            close_loop=False,
+            allowed_updates=Update.ALL_TYPES
+        )
+    finally:
+        # التأكد من إغلاق الاتصالات
+        cursor.close()
+        conn.close()
+        asyncio.run(app.shutdown())
+
 
 if __name__ == "__main__":
-
     main()
-
