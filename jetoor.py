@@ -115,7 +115,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ✅ --- سحب الأرباح: اختيار الطريقة ---
     elif q.data == "withdraw":
         min_w = get_setting("min_withdraw")
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=?", (uid,))
+        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (uid,))
         bal = cursor.fetchone()[0]
         if bal < min_w:
             await q.message.reply_text(f"❌ الحد الأدنى للسحب هو {min_w}$. رصيدك: {bal}$.")
@@ -680,7 +680,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_id = update.message.photo[-1].file_id
         cursor.execute("""
             INSERT INTO payments (user_id, amount, proof, status, payment_method_id)
-            VALUES (?, ?, ?, 'PENDING', ?)
+            VALUES (%s,%s,%s, 'PENDING', %s)
         """, (uid, price, file_id, method_id))
         conn.commit()
         pid = cursor.lastrowid
@@ -864,3 +864,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
