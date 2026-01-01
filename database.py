@@ -129,3 +129,4 @@ def set_setting(key, value):
         conn.rollback()
         logger.error(f"set_setting('{key}', '{value}') error: {e}")
         raise
+
