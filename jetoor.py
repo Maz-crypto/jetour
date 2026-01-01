@@ -45,7 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ref == user.id:
         ref = None
     cursor.execute(
-        "INSERT OR IGNORE INTO users (telegram_id, username, referrer_id) VALUES (?,?,?)",
+        "INSERT OR IGNORE INTO users (telegram_id, username, referrer_id) VALUES (%s,%s,%s)",
         (user.id, user.username, ref)
     )
     conn.commit()
@@ -82,7 +82,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method_id = int(q.data.split("_")[1])
         context.user_data["awaiting_payment"] = True
         context.user_data["payment_method_id"] = method_id
-        cursor.execute("SELECT name,barcode FROM payment_methods WHERE id=?", (method_id,))
+        cursor.execute("SELECT name,barcode FROM payment_methods WHERE id=%s", (method_id,))
         name, barcode = cursor.fetchone()
         await q.message.reply_text(
             f"💵 أرسل **صورة إشعار الدفع** (لقطة من تطبيق الدفع)\n"
@@ -93,7 +93,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif q.data == "referral":
-        cursor.execute("SELECT subscription_active FROM users WHERE telegram_id=?", (uid,))
+        cursor.execute("SELECT subscription_active FROM users WHERE telegram_id=%s", (uid,))
         active = cursor.fetchone()[0]
         if active != 1:
             await q.message.reply_text("❌ يجب أن تكون مشتركًا لتفعيل رابط الإحالة.")
@@ -107,7 +107,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif q.data == "balance":
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=?", (uid,))
+        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (uid,))
         bal = cursor.fetchone()[0]
         await q.message.reply_text(f"💵 رصيدك: {bal}$")
         return
@@ -133,7 +133,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- شام كاش ---
     elif q.data == "withdraw_sham":
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=?", (uid,))
+        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (uid,))
         bal = cursor.fetchone()[0]
         context.user_data["withdraw_method"] = "sham"
         context.user_data["withdraw_amount"] = bal
@@ -145,7 +145,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- USDT (BEP20) ---
     elif q.data == "withdraw_usdt":
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=?", (uid,))
+        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (uid,))
         bal = cursor.fetchone()[0]
         context.user_data["withdraw_method"] = "usdt"
         context.user_data["withdraw_amount"] = bal
@@ -169,14 +169,14 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.edit_text("❌ بيانات مفقودة. يرجى المحاولة من جديد.")
             return
 
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=?", (uid,))
+        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (uid,))
         bal = cursor.fetchone()[0]
 
             # ✅ حفظ نوع الطريقة (sham أو usdt)
         method_type = "sham" if method == "sham" else "usdt"
         cursor.execute("""
                 INSERT INTO withdrawals (user_id, amount, sham_cash_link, method, status) 
-                VALUES (?, ?, ?, ?, 'PENDING')
+                VALUES (%s,%s,%s,%s, 'PENDING')
             """, (uid, bal, data, method_type))
 
         conn.commit()
@@ -257,7 +257,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif q.data.startswith("confirm_reject_"):
             pid = int(q.data.split("_")[2])
-            cursor.execute("UPDATE payments SET status='REJECTED' WHERE id=?", (pid,))
+            cursor.execute("UPDATE payments SET status='REJECTED' WHERE id=%s", (pid,))
             conn.commit()
             await q.message.reply_text("❌ تم الرفض.")
             return
@@ -271,7 +271,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.message.reply_text("📭 لا توجد طلبات سحب.")
                 return
             for wid, u, amt, data, method_type in rows:
-                cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=?", (u,))
+                cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (u,))
                 bal = cursor.fetchone()[0]
                 
                 # ✅ تحديد الطريقة حسب اختيار المستخدم
@@ -298,7 +298,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ✅ --- استعلام عن المستخدم ---
         elif q.data.startswith("inquiry_"):
             user_id = int(q.data.split("_")[1])
-            cursor.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,))
+            cursor.execute("SELECT * FROM users WHERE telegram_id=%s", (user_id,))
             user = cursor.fetchone()
             if not user:
                 await q.message.reply_text("❌ المستخدم غير موجود.")
@@ -331,9 +331,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif q.data.startswith("confirm_cancel_w_"):
             wid = int(q.data.split("_")[3])
-            cursor.execute("SELECT user_id FROM withdrawals WHERE id=?", (wid,))
+            cursor.execute("SELECT user_id FROM withdrawals WHERE id=%s", (wid,))
             u = cursor.fetchone()[0]
-            cursor.execute("UPDATE withdrawals SET status='CANCELLED' WHERE id=?", (wid,))
+            cursor.execute("UPDATE withdrawals SET status='CANCELLED' WHERE id=%s", (wid,))
             conn.commit()
             try:
                 await context.bot.send_message(u, "❌ تم إلغاء طلب سحب أرباحك. تواصل مع الدعم للمزيد.")
@@ -435,7 +435,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             name, barcode = context.user_data.pop("tmp_payment")
             try:
-                cursor.execute("INSERT INTO payment_methods (name, barcode) VALUES (?, ?)", (name, barcode))
+                cursor.execute("INSERT INTO payment_methods (name, barcode) VALUES (%s,%s)", (name, barcode))
                 conn.commit()
                 await q.message.edit_text("✅ تم الإضافة بنجاح!")
             except Exception as e:
@@ -455,7 +455,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif q.data.startswith("confirm_del_link_"):
             lid = int(q.data.split("_")[3])
-            cursor.execute("DELETE FROM channel_links WHERE id=?", (lid,))
+            cursor.execute("DELETE FROM channel_links WHERE id=%s", (lid,))
             conn.commit()
             await q.message.reply_text("✅ تم الحذف.")
             return
@@ -467,7 +467,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif q.data.startswith("confirm_del_pm_"):
             m_id = int(q.data.split("_")[3])
-            cursor.execute("DELETE FROM payment_methods WHERE id=?", (m_id,))
+            cursor.execute("DELETE FROM payment_methods WHERE id=%s", (m_id,))
             conn.commit()
             await q.message.reply_text("✅ تم الحذف.")
             return
@@ -553,7 +553,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             label = "محفظة USDT"
 
         # ✅ تحقق من طلب معلق
-        cursor.execute("SELECT id FROM withdrawals WHERE user_id=? AND status='PENDING'", (uid,))
+        cursor.execute("SELECT id FROM withdrawals WHERE user_id=%s AND status='PENDING'", (uid,))
         if cursor.fetchone():
             await update.message.reply_text("⏳ لديك طلب سحب معلق. انتظر معالجته أولًا.")
             context.user_data.pop("withdraw_method", None)
@@ -593,13 +593,13 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # جلب الرصيد
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=?", (uid,))
+        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id=%s", (uid,))
         bal = cursor.fetchone()[0]
 
         # ✅ حفظ الطلب
         cursor.execute("""
             INSERT INTO withdrawals (user_id, amount, sham_cash_link, status) 
-            VALUES (?, ?, ?, 'PENDING')
+            VALUES (%s,%s,%s, 'PENDING')
         """, (uid, bal, data))
         conn.commit()
         wid = cursor.lastrowid
@@ -661,7 +661,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         added = 0
         for link in links:
             try:
-                cursor.execute("INSERT OR IGNORE INTO channel_links (link) VALUES (?)", (link,))
+                cursor.execute("INSERT OR IGNORE INTO channel_links (link) VALUES (%s)", (link,))
                 added += 1
             except Exception as e:
                 logger.error(f"فشل إدخال الرابط: {e}")
@@ -729,7 +729,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "approve_pid" in context.user_data and uid in ADMINS:
         pid = context.user_data["approve_pid"]
         try:
-            cursor.execute("SELECT user_id FROM payments WHERE id = ? AND status = 'PENDING'", (pid,))
+            cursor.execute("SELECT user_id FROM payments WHERE id = %s AND status = 'PENDING'", (pid,))
             row = cursor.fetchone()
             if not row:
                 await update.message.reply_text("❌ الطلب غير موجود أو مُعالج مسبقًا.")
@@ -745,18 +745,18 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             link_id, link = link_row
 
             end_date = "2026-12-31"
-            cursor.execute("UPDATE payments SET status = 'APPROVED', transaction_id = ? WHERE id = ?", (text, pid))
-            cursor.execute("UPDATE users SET subscription_active = 1, subscription_end = ? WHERE telegram_id = ?", (end_date, user_id))
+            cursor.execute("UPDATE payments SET status = 'APPROVED', transaction_id = %s WHERE id = %s", (text, pid))
+            cursor.execute("UPDATE users SET subscription_active = 1, subscription_end = %s WHERE telegram_id = %s", (end_date, user_id))
 
-            cursor.execute("SELECT referrer_id FROM users WHERE telegram_id = ?", (user_id,))
+            cursor.execute("SELECT referrer_id FROM users WHERE telegram_id = %s", (user_id,))
             ref = cursor.fetchone()[0]
             if ref:
-                cursor.execute("SELECT subscription_active FROM users WHERE telegram_id = ?", (ref,))
+                cursor.execute("SELECT subscription_active FROM users WHERE telegram_id = %s", (ref,))
                 if cursor.fetchone()[0] == 1:
                     reward = get_setting("referral_reward")
-                    cursor.execute("UPDATE users SET referral_balance = referral_balance + ? WHERE telegram_id = ?", (reward, ref))
+                    cursor.execute("UPDATE users SET referral_balance = referral_balance + %s WHERE telegram_id = %s", (reward, ref))
 
-            cursor.execute("DELETE FROM channel_links WHERE id = ?", (link_id,))
+            cursor.execute("DELETE FROM channel_links WHERE id = %s", (link_id,))
             conn.commit()
 
             try:
@@ -776,7 +776,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- 7. صرف السحب (يُصفّر الرصيد) ---
     if "pay_wid" in context.user_data and uid in ADMINS:
         wid = context.user_data["pay_wid"]
-        cursor.execute("SELECT user_id, amount, sham_cash_link, method FROM withdrawals WHERE id=?", (wid,))
+        cursor.execute("SELECT user_id, amount, sham_cash_link, method FROM withdrawals WHERE id=%s", (wid,))
         row = cursor.fetchone()
         if not row:
             await update.message.reply_text("❌ طلب السحب غير موجود.")
@@ -787,8 +787,8 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ✅ تحديد الطريقة حسب اختيار المستخدم
         method = "شام كاش" if method_type == "sham" else "USDT (BEP20)" if method_type == "usdt" else "غير معروف"
 
-        cursor.execute("UPDATE users SET referral_balance = 0 WHERE telegram_id=?", (u,))
-        cursor.execute("UPDATE withdrawals SET status='PAID', transaction_id=? WHERE id=?", (text, wid))
+        cursor.execute("UPDATE users SET referral_balance = 0 WHERE telegram_id=%s", (u,))
+        cursor.execute("UPDATE withdrawals SET status='PAID', transaction_id=%s WHERE id=%s", (text, wid))
         conn.commit()
 
         try:
@@ -820,7 +820,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if "edit_pm_id" in context.user_data and uid in ADMINS:
         m_id = context.user_data["edit_pm_id"]
-        cursor.execute("UPDATE payment_methods SET name = ? WHERE id = ?", (text, m_id))
+        cursor.execute("UPDATE payment_methods SET name = %s WHERE id = %s", (text, m_id))
         conn.commit()
         context.user_data.pop("edit_pm_id")
         await update.message.reply_text("✅ تم التعديل.")
@@ -862,4 +862,5 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
+
     main()
