@@ -1,90 +1,131 @@
-import sqlite3
+# database.py — PostgreSQL version for Render
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import logging
 
-conn = sqlite3.connect(DB_PATH)
-cursor = conn.cursor()
+logger = logging.getLogger(__name__)
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("❌ DATABASE_URL is not set in environment variables!")
+
+try:
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    cursor = conn.cursor()
+    logger.info("✅ Connected to PostgreSQL.")
+except Exception as e:
+    logger.critical(f"❌ Failed to connect to database: {e}")
+    raise
 
 def init_db():
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER UNIQUE NOT NULL,
-            username TEXT,
-            referrer_id INTEGER,
-            referral_balance REAL DEFAULT 0.0,
-            subscription_active INTEGER DEFAULT 0,
-            subscription_end TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    """Initialize tables if not exist — compatible with PostgreSQL"""
+    try:
+        # 1. Users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
+                username TEXT,
+                referrer_id BIGINT,
+                referral_balance DECIMAL(10,2) DEFAULT 0,
+                subscription_active BOOLEAN DEFAULT FALSE,
+                subscription_end DATE,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            amount REAL NOT NULL,
-            proof TEXT NOT NULL,
-            status TEXT DEFAULT 'PENDING',
-            payment_method_id INTEGER,
-            transaction_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(user_id) REFERENCES users(telegram_id)
-        )
-    ''')
+        # 2. Settings (key-value store)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        """)
 
-    # ✅ جدول السحب مع عمود sham_cash_link (يُستخدم للكود أو المحفظة)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS withdrawals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            amount REAL NOT NULL,
-            sham_cash_link TEXT,
-            method TEXT,  -- ✅ عمود جديد
-            status TEXT DEFAULT 'PENDING',
-            transaction_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(user_id) REFERENCES users(telegram_id)
-        )
-    ''')
+        # Insert default settings if not exist
+        defaults = {
+            "subscription_price": "5",
+            "referral_reward": "1",
+            "min_withdraw": "2"
+        }
+        for k, v in defaults.items():
+            cursor.execute("""
+                INSERT INTO settings (key, value)
+                VALUES (%s, %s)
+                ON CONFLICT (key) DO NOTHING;
+            """, (k, str(v)))
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS payment_methods (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            barcode TEXT NOT NULL
-        )
-    ''')
+        # 3. Payment methods
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS payment_methods (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                barcode TEXT NOT NULL
+            );
+        """)
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS channel_links (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            link TEXT NOT NULL UNIQUE
-        )
-    ''')
+        # 4. Payments
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                amount DECIMAL(10,2) NOT NULL,
+                proof TEXT,
+                status TEXT DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
+                payment_method_id INTEGER,
+                transaction_id TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-    ''')
+        # 5. Withdrawals
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS withdrawals (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                amount DECIMAL(10,2) NOT NULL,
+                sham_cash_link TEXT,  -- will store SC code or USDT address
+                method TEXT DEFAULT 'sham',  -- 'sham' or 'usdt'
+                status TEXT DEFAULT 'PENDING', -- PENDING, PAID, CANCELLED
+                transaction_id TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
 
-    defaults = [
-        ('subscription_price', '100'),
-        ('referral_reward', '50'),
-        ('min_withdraw', '50')
-    ]
-    for key, val in defaults:
-        cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, val))
-    conn.commit()
+        # 6. Channel links
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS channel_links (
+                id SERIAL PRIMARY KEY,
+                link TEXT UNIQUE NOT NULL
+            );
+        """)
+
+        conn.commit()
+        logger.info("✅ Database tables initialized.")
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"❌ init_db failed: {e}")
+        raise
 
 def get_setting(key):
-    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-    row = cursor.fetchone()
-    return float(row[0]) if row and '.' in row[0] else int(row[0]) if row else 0
+    try:
+        cursor.execute("SELECT value FROM settings WHERE key = %s;", (key,))
+        row = cursor.fetchone()
+        return row["value"] if row else None
+    except Exception as e:
+        logger.error(f"get_setting('{key}') error: {e}")
+        return None
 
 def set_setting(key, value):
-    cursor.execute("UPDATE settings SET value = ? WHERE key = ?", (str(value), key))
-    conn.commit()
-
-
-init_db()
+    try:
+        cursor.execute("""
+            INSERT INTO settings (key, value)
+            VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+        """, (key, str(value)))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"set_setting('{key}', '{value}') error: {e}")
+        raise
