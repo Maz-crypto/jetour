@@ -1,4 +1,8 @@
+#!/bin/bash
 # render_build_command.sh
-# تأكد من تثبيت التبعيات النظامية
-apt-get update && apt-get install -y libpq-dev gcc
+
+# تثبيت تبعيات النظام المطلوبة لبناء psycopg2
+apt-get update && apt-get install -y libpq-dev gcc python3-dev
+
+# تثبيت المتطلبات
 pip install -r requirements.txt
