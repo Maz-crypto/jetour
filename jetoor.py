@@ -37,7 +37,7 @@ STATE_EDIT_SETTING = "admin:edit:"
 STATE_EDIT_PM = "admin:edit_pm:"
 
 # ---------------- UTILS ----------------
-def parse_callback( str):
+def parse_callback(data: str):
     try:
         parts = data.split(":", 2)
         action = parts[0]
@@ -46,6 +46,7 @@ def parse_callback( str):
         return action, id_val, extra
     except:
         return None, None, None
+
 
 def clean_user_data(context, keys=None):
     if keys:
@@ -884,5 +885,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
