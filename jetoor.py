@@ -145,7 +145,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # ✅ رابط صحيح بدون مسافات
             link = f"https://t.me/news_acc_bot?start={uid}"
             await q.message.reply_text(
-                f"🔗 رابطك:\n{link}\n💰 العمولة: {reward}\$",
+                f"🔗 رابطك:\n{link}\n💰 العمولة: {reward}\\$",
                 disable_web_page_preview=True,
                 parse_mode="HTML"
             )
@@ -206,8 +206,8 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             barcode = row["barcode"]
             await q.message.reply_text(
                 f"💵 أرسل **صورة إشعار الدفع** \\(لقطة من تطبيق الدفع\\)\n"
-                f"📱 الطريقة: *{escape_markdown(name, version=2)}*\n"
-                f"📎 الرابط: `{escape_markdown(barcode, version=2)}`",
+                f"📱 الطريقة: *{ name }*\n"
+                f"📎 الرابط: `{ barcode }`",
                 parse_mode="HTML"
             )
         except (ValueError, TypeError):
@@ -245,7 +245,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"👤 المستخدم: {uid}\n"
                         f"💵 المبلغ: {wd['amount']}\\$\n"
                         f"📌 الطريقة: {method_text}\n"
-                        f"📋 البيانات: `{escape_markdown(wd['data'], version=2)}`",
+                        f"📋 البيانات: `{ wd['data'] }`",
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("✅ تأكيد", callback_data=f"pay:{wid}")],
@@ -318,7 +318,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"💵 المبلغ: {r['amount']}\\$\n"
                     f"📊 رصيده الحالي: {bal}\\$\n"
                     f"📌 الطريقة: {method}\n"
-                    f"📋 البيانات: `{escape_markdown(r['sham_cash_link'] or '---', version=2)}`",
+                    f"📋 البيانات: `{ r['sham_cash_link'] or '---' }`",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("✅ تأكيد", callback_data=f"pay:{r['id']}"),
@@ -362,7 +362,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             buttons = [[InlineKeyboardButton("➕ إضافة روابط", callback_data="add_links:bulk")]]
             for r in rows:
                 short = (r["link"][:25] + "…") if len(r["link"]) > 25 else r["link"]
-                buttons.append([InlineKeyboardButton(f"🗑️ {escape_markdown(short, version=2)}", callback_data=f"del_link:{r['id']}")])
+                buttons.append([InlineKeyboardButton(f"🗑️ { short }", callback_data=f"del_link:{r['id']}")])
             buttons.append([InlineKeyboardButton("🔙", callback_data="cancel:op")])
             await q.message.reply_text("🔗 روابط القناة:", reply_markup=InlineKeyboardMarkup(buttons))
         
@@ -546,7 +546,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 target_id,
-                f"📩 **رسالة من الإدارة**:\n\n{escape_markdown(text, version=2)}",
+                f"📩 **رسالة من الإدارة**:\n\n{ text }",
                 parse_mode="HTML"
             )
             await update.message.reply_text(f"✅ تم الإرسال إلى `{target_id}`\\.", parse_mode="HTML")
@@ -605,7 +605,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ تأكيد طلب السحب:\n"
             f"💵 المبلغ: {amount}\\$\n"
             f"📌 الطريقة: {method_text}\n"
-            f"📋 {label}: `{escape_markdown(text, version=2)}`\n\n"
+            f"📋 {label}: `{ text }`\n\n"
             f"هل تريد تأكيد الطلب؟",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
@@ -658,7 +658,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "state": STATE_ADD_PAYMENT_LINK,
             "new_payment_name": text
         })
-        await update.message.reply_text(f"✅ الاسم: *{escape_markdown(text, version=2)}*\n🔗 أرسل الرابط:", parse_mode="HTML")
+        await update.message.reply_text(f"✅ الاسم: *{ text }*\n🔗 أرسل الرابط:", parse_mode="HTML")
         return
 
     # --- إضافة طريقة دفع: الرابط ---
@@ -754,7 +754,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     user_id,
-                    f"🎉 اشتراكك مفعل\\!\nالرابط:\n{escape_markdown(link, version=2)}",
+                    f"🎉 اشتراكك مفعل\\!\nالرابط:\n{ link }",
                     parse_mode="HTML"
                 )
             except:
@@ -797,9 +797,9 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     u,
                     f"✅ تم صرف أرباحك بنجاح\\!\\n\\n"
                     f"💵 المبلغ: {amt}\\$\n"
-                    f"🆔 رقم العملية: {escape_markdown(text, version=2)}\n"
+                    f"🆔 رقم العملية: { text }\n"
                     f"📌 الطريقة: {method}\n"
-                    f"📋 البيانات: `{escape_markdown(data or '', version=2)}`",
+                    f"📋 البيانات: `{ data or '' }`",
                     parse_mode="HTML"
                 )
             except Exception as e:
@@ -885,3 +885,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
