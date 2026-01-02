@@ -116,7 +116,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     action, id_val, extra = parse_callback(q.data)
     if not action:
-        await q.message.reply_text("❌ طلب غير صالح\\.")
+        await q.message.reply_text("❌ طلب غير صالح.")
         return
 
     uid = q.from_user.id
@@ -126,7 +126,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if id_val == "subscribe":
             rows = await safe_db_fetchall("SELECT id, name, barcode FROM payment_methods")
             if not rows:
-                await q.message.reply_text("💳 لا توجد طرق دفع متاحة\\. تواصل مع الدعم\\.")
+                await q.message.reply_text("💳 لا توجد طرق دفع متاحة. تواصل مع الدعم.")
                 return
             buttons = [[InlineKeyboardButton(r["name"], callback_data=f"paymethod:{r['id']}")] for r in rows]
             await q.message.reply_text("💳 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(buttons))
@@ -137,7 +137,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             active = row["subscription_active"] if row else 0
             if active != 1:
-                await q.message.reply_text("❌ يجب أن تكون مشتركًا لتفعيل رابط الإحالة\\.")
+                await q.message.reply_text("❌ يجب أن تكون مشتركًا لتفعيل رابط الإحالة.")
                 return
             reward = (await safe_db_fetchone(
                 "SELECT value FROM settings WHERE key = 'referral_reward'"
@@ -145,7 +145,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # ✅ رابط صحيح بدون مسافات
             link = f"https://t.me/news_acc_bot?start={uid}"
             await q.message.reply_text(
-                f"🔗 رابطك:\n{link}\n💰 العمولة: {reward}\\$",
+                f"🔗 رابطك:\n{link}\n💰 العمولة: {reward}$",
                 disable_web_page_preview=True,
                 parse_mode="HTML"
             )
@@ -155,7 +155,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "SELECT referral_balance FROM users WHERE telegram_id = %s", (uid,)
             )
             bal = row["referral_balance"] if row else 0
-            await q.message.reply_text(f"💵 رصيدك: {bal}\\$", parse_mode="HTML")
+            await q.message.reply_text(f"💵 رصيدك: {bal}$", parse_mode="HTML")
         
         elif id_val == "withdraw":
             row = await safe_db_fetchone(
@@ -167,7 +167,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ))["value"])
             if bal < min_w:
                 await q.message.reply_text(
-                    f"❌ الحد الأدنى للسحب هو {min_w}\\$\\. رصيدك: {bal}\\$\\.",
+                    f"❌ الحد الأدنى للسحب هو {min_w}$. رصيدك: {bal}$.",
                     parse_mode="HTML"
                 )
             else:
@@ -176,11 +176,11 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "amount": bal
                 })
                 await q.message.reply_text(
-                    f"💰 رصيدك جاهز للسحب: {bal}\\$\\n\\nاختر طريقة الاستلام:",
+                    f"💰 رصيدك جاهز للسحب: {bal}$nnاختر طريقة الاستلام:",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("شام كاش", callback_data="withdraw:sham")],
-                        [InlineKeyboardButton("USDT \\(BEP20\\)", callback_data="withdraw:usdt")],
+                        [InlineKeyboardButton("USDT (BEP20)", callback_data="withdraw:usdt")],
                         [InlineKeyboardButton("إلغاء", callback_data="cancel:op")]
                     ])
                 )
@@ -200,31 +200,31 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "SELECT name, barcode FROM payment_methods WHERE id = %s", (method_id,)
             )
             if not row:
-                await q.message.reply_text("❌ طريقة دفع غير موجودة\\.")
+                await q.message.reply_text("❌ طريقة دفع غير موجودة.")
                 return
             name = row["name"]
             barcode = row["barcode"]
             await q.message.reply_text(
-                f"💵 أرسل **صورة إشعار الدفع** \\(لقطة من تطبيق الدفع\\)\n"
+                f"💵 أرسل **صورة إشعار الدفع** (لقطة من تطبيق الدفع)\n"
                 f"📱 الطريقة: *{ name }*\n"
                 f"📎 الرابط: `{ barcode }`",
                 parse_mode="HTML"
             )
         except (ValueError, TypeError):
-            await q.message.reply_text("❌ معرّف غير صالح\\.")
+            await q.message.reply_text("❌ معرّف غير صالح.")
 
     elif action == "withdraw":
         context.user_data.update({
             "state": STATE_WITHDRAW_DATA,
             "withdraw_method": id_val  # sham أو usdt
         })
-        msg = "كود شام كاش:" if id_val == "sham" else "محفظة USDT \\(BEP20\\):"
+        msg = "كود شام كاش:" if id_val == "sham" else "محفظة USDT (BEP20):"
         await q.message.reply_text(f"🔢 {msg}", parse_mode="HTML")
 
     elif action == "confirm" and id_val == "withdraw":
         wd = context.user_data.pop("temp_withdraw", None)
         if not wd:
-            await q.message.edit_text("❌ بيانات مفقودة أو منتهية\\.", parse_mode="HTML")
+            await q.message.edit_text("❌ بيانات مفقودة أو منتهية.", parse_mode="HTML")
             return
         try:
             row = await safe_db_fetchone("""
@@ -234,16 +234,16 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """, (uid, wd["amount"], wd["data"], wd["method"]))
             wid = row["id"]
             clean_user_data(context, ["temp_withdraw"])
-            await q.message.edit_text(f"✅ تم إرسال طلب السحب #{wid} للأدمن\\.", parse_mode="HTML")
+            await q.message.edit_text(f"✅ تم إرسال طلب السحب #{wid} للأدمن.", parse_mode="HTML")
             # إشعار الأدمن
-            method_text = "شام كاش" if wd["method"] == "sham" else "USDT \\(BEP20\\)"
+            method_text = "شام كاش" if wd["method"] == "sham" else "USDT (BEP20)"
             for admin in ADMINS:
                 try:
                     await context.bot.send_message(
                         admin,
                         f"💸 طلب سحب جديد #{wid}\n"
                         f"👤 المستخدم: {uid}\n"
-                        f"💵 المبلغ: {wd['amount']}\\$\n"
+                        f"💵 المبلغ: {wd['amount']}$\n"
                         f"📌 الطريقة: {method_text}\n"
                         f"📋 البيانات: `{ wd['data'] }`",
                         parse_mode="HTML",
@@ -257,20 +257,20 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Failed to notify admin {admin}: {e}")
         except Exception as e:
             logger.error(f"Withdraw insert failed: {e}")
-            await q.message.edit_text("❌ خطأ في معالجة الطلب\\.", parse_mode="HTML")
+            await q.message.edit_text("❌ خطأ في معالجة الطلب.", parse_mode="HTML")
 
     elif action == "edit" and id_val == "withdraw_data":
         method = context.user_data.get("withdraw_method_temp", "sham")
         bal = context.user_data.get("withdraw_amount", 0)
-        msg = "أعد إدخال كود شام كاش:" if method == "sham" else "أعد إدخال محفظة USDT \\(BEP20\\):"
+        msg = "أعد إدخال كود شام كاش:" if method == "sham" else "أعد إدخال محفظة USDT (BEP20):"
         context.user_data["state"] = STATE_WITHDRAW_DATA
         context.user_data["withdraw_method"] = method
         context.user_data.pop("withdraw_data_temp", None)
-        await q.message.edit_text(f"{msg}\n💵 المبلغ: {bal}\\$", parse_mode="HTML")
+        await q.message.edit_text(f"{msg}\n💵 المبلغ: {bal}$", parse_mode="HTML")
 
     elif action == "cancel":
         clean_user_data(context)
-        await q.message.reply_text("❌ تم الإلغاء\\.", parse_mode="HTML")
+        await q.message.reply_text("❌ تم الإلغاء.", parse_mode="HTML")
 
     # ---------- ADMIN ----------
     if uid not in ADMINS:
@@ -282,13 +282,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "SELECT id, user_id, amount, proof FROM payments WHERE status = 'PENDING'"
             )
             if not rows:
-                await q.message.reply_text("📭 لا توجد طلبات\\.", parse_mode="HTML")
+                await q.message.reply_text("📭 لا توجد طلبات.", parse_mode="HTML")
                 return
             for r in rows:
                 try:
                     await context.bot.send_photo(
                         uid, photo=r["proof"],
-                        caption=f"🧾 اشتراك #{r['id']}\n👤 {r['user_id']}\n💵 {r['amount']}\\$",
+                        caption=f"🧾 اشتراك #{r['id']}\n👤 {r['user_id']}\n💵 {r['amount']}$",
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("✅", callback_data=f"approve:{r['id']}"),
@@ -304,19 +304,19 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 FROM withdrawals WHERE status = 'PENDING'
             """)
             if not rows:
-                await q.message.reply_text("📭 لا توجد طلبات سحب\\.", parse_mode="HTML")
+                await q.message.reply_text("📭 لا توجد طلبات سحب.", parse_mode="HTML")
                 return
             for r in rows:
                 bal_row = await safe_db_fetchone(
                     "SELECT referral_balance FROM users WHERE telegram_id = %s", (r["user_id"],)
                 )
                 bal = bal_row["referral_balance"] if bal_row else 0
-                method = "شام كاش" if r["method"] == "sham" else "USDT \\(BEP20\\)"
+                method = "شام كاش" if r["method"] == "sham" else "USDT (BEP20)"
                 await q.message.reply_text(
                     f"💸 طلب سحب #{r['id']}\n"
                     f"👤 المستخدم: {r['user_id']}\n"
-                    f"💵 المبلغ: {r['amount']}\\$\n"
-                    f"📊 رصيده الحالي: {bal}\\$\n"
+                    f"💵 المبلغ: {r['amount']}$\n"
+                    f"📊 رصيده الحالي: {bal}$\n"
                     f"📌 الطريقة: {method}\n"
                     f"📋 البيانات: `{ r['sham_cash_link'] or '---' }`",
                     parse_mode="HTML",
@@ -332,7 +332,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             r = (await safe_db_fetchone("SELECT value FROM settings WHERE key = 'referral_reward'"))["value"]
             m = (await safe_db_fetchone("SELECT value FROM settings WHERE key = 'min_withdraw'"))["value"]
             await q.message.reply_text(
-                f"⚙️ الإعدادات:\n- السعر: {p}\\$\n- العمولة: {r}\\$\n- الحد الأدنى: {m}\\$",
+                f"⚙️ الإعدادات:\n- السعر: {p}$\n- العمولة: {r}$\n- الحد الأدنى: {m}$",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✏️ سعر", callback_data="edit:price")],
@@ -352,7 +352,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 buttons.append([InlineKeyboardButton(f"💳 {r['name']}", callback_data="cancel:op")])
             buttons.append([InlineKeyboardButton("🔙 رجوع", callback_data="cancel:op")])
             await q.message.reply_text(
-                "💳 طرق الدفع المتوفرة:" if rows else "💳 لا توجد طرق دفع مُضافة بعد\\.",
+                "💳 طرق الدفع المتوفرة:" if rows else "💳 لا توجد طرق دفع مُضافة بعد.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
@@ -372,7 +372,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif id_val == "send_to_user":
             context.user_data["state"] = STATE_AWAITING_USER_ID
-            await q.message.reply_text("👤 أرسل معرف المستخدم \\(ID\\):", parse_mode="HTML")
+            await q.message.reply_text("👤 أرسل معرف المستخدم (ID):", parse_mode="HTML")
 
     elif action == "approve":
         try:
@@ -383,7 +383,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             await q.message.reply_text("🔢 أدخل رقم العملية:")
         except (ValueError, TypeError):
-            await q.message.reply_text("❌ معرّف غير صالح\\.")
+            await q.message.reply_text("❌ معرّف غير صالح.")
 
     elif action == "reject":
         await q.message.reply_text("⚠️ تأكيد الرفض؟", reply_markup=confirm_menu("✅", "❌", f"confirm_reject:{id_val}", "cancel:op"))
@@ -392,10 +392,10 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             pid = int(id_val)
             await safe_db_execute("UPDATE payments SET status = 'REJECTED' WHERE id = %s", (pid,))
-            await q.message.reply_text("❌ تم الرفض\\.", parse_mode="HTML")
+            await q.message.reply_text("❌ تم الرفض.", parse_mode="HTML")
         except Exception as e:
             logger.error(f"Reject failed: {e}")
-            await q.message.reply_text("❌ خطأ في المعالجة\\.")
+            await q.message.reply_text("❌ خطأ في المعالجة.")
 
     elif action == "pay":
         try:
@@ -406,7 +406,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             await q.message.reply_text("🔢 أدخل رقم العملية:")
         except (ValueError, TypeError):
-            await q.message.reply_text("❌ معرّف غير صالح\\.")
+            await q.message.reply_text("❌ معرّف غير صالح.")
 
     elif action == "cancel_w":
         await q.message.reply_text("⚠️ تأكيد إلغاء طلب السحب؟", reply_markup=confirm_menu("✅", "❌", f"confirm_cancel_w:{id_val}", "cancel:op"))
@@ -416,42 +416,42 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             wid = int(id_val)
             row = await safe_db_fetchone("SELECT user_id FROM withdrawals WHERE id = %s", (wid,))
             if not row:
-                await q.message.reply_text("❌ الطلب غير موجود\\.")
+                await q.message.reply_text("❌ الطلب غير موجود.")
                 return
             u = row["user_id"]
             await safe_db_execute("UPDATE withdrawals SET status = 'CANCELLED' WHERE id = %s", (wid,))
             try:
                 await context.bot.send_message(
                     u,
-                    "❌ تم إلغاء طلب سحب أرباحك\\. تواصل مع الدعم للمزيد\\.",
+                    "❌ تم إلغاء طلب سحب أرباحك. تواصل مع الدعم للمزيد.",
                     parse_mode="HTML"
                 )
             except:
                 pass
-            await q.message.reply_text("✅ تم الإلغاء\\.", parse_mode="HTML")
+            await q.message.reply_text("✅ تم الإلغاء.", parse_mode="HTML")
         except Exception as e:
             logger.error(f"Cancel withdrawal failed: {e}")
-            await q.message.reply_text("❌ خطأ في المعالجة\\.")
+            await q.message.reply_text("❌ خطأ في المعالجة.")
 
     elif action == "inquiry":
         try:
             user_id = int(id_val)
             row = await safe_db_fetchone("SELECT * FROM users WHERE telegram_id = %s", (user_id,))
             if not row:
-                await q.message.reply_text("❌ المستخدم غير موجود\\.", parse_mode="HTML")
+                await q.message.reply_text("❌ المستخدم غير موجود.", parse_mode="HTML")
                 return
             status = "نشط" if row["subscription_active"] == 1 else "غير نشط"
             await q.message.reply_text(
                 f"ℹ️ استعلام عن المستخدم {row['telegram_id']}:\n"
                 f"👤 المعرف: @{row['username'] or '---'}\n"
-                f"💰 الرصيد: {row['referral_balance']}\\$\n"
+                f"💰 الرصيد: {row['referral_balance']}$\n"
                 f"📌 حالة الاشتراك: {status}\n"
                 f"🗓️ انتهاء الاشتراك: {row['subscription_end'] or '---'}\n"
                 f"👥 المُحيل: {row['referrer_id'] or '---'}",
                 parse_mode="HTML"
             )
         except (ValueError, TypeError):
-            await q.message.reply_text("❌ معرّف غير صالح\\.")
+            await q.message.reply_text("❌ معرّف غير صالح.")
 
     elif action == "edit":
         key_map = {"price": "subscription_price", "ref": "referral_reward", "min": "min_withdraw"}
@@ -470,7 +470,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["state"] = STATE_EDIT_PM + str(m_id)
             await q.message.reply_text("أدخل الاسم الجديد:")
         except (ValueError, TypeError):
-            await q.message.reply_text("❌ معرّف غير صالح\\.")
+            await q.message.reply_text("❌ معرّف غير صالح.")
 
     elif action == "del_pm":
         await q.message.reply_text("⚠️ حذف الطريقة؟", reply_markup=confirm_menu("✅", "❌", f"confirm_del_pm:{id_val}", "cancel:op"))
@@ -479,15 +479,15 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             m_id = int(id_val)
             await safe_db_execute("DELETE FROM payment_methods WHERE id = %s", (m_id,))
-            await q.message.reply_text("✅ تم الحذف\\.", parse_mode="HTML")
+            await q.message.reply_text("✅ تم الحذف.", parse_mode="HTML")
         except Exception as e:
             logger.error(f"Delete payment method failed: {e}")
-            await q.message.reply_text("❌ خطأ في الحذف\\.")
+            await q.message.reply_text("❌ خطأ في الحذف.")
 
     elif action == "add_links" and id_val == "bulk":
         context.user_data["state"] = "add_links:bulk"
         await q.message.reply_text(
-            "📎 أرسل جميع روابط القناة في رسالة واحدة \\(كل رابط في سطر\\):\n\n"
+            "📎 أرسل جميع روابط القناة في رسالة واحدة (كل رابط في سطر):\n\n"
             "مثال:\n`https://t.me/channel1`\n`https://t.me/channel2`",
             parse_mode="HTML"
         )
@@ -499,10 +499,10 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             lid = int(id_val)
             await safe_db_execute("DELETE FROM channel_links WHERE id = %s", (lid,))
-            await q.message.reply_text("✅ تم الحذف\\.", parse_mode="HTML")
+            await q.message.reply_text("✅ تم الحذف.", parse_mode="HTML")
         except Exception as e:
             logger.error(f"Delete link failed: {e}")
-            await q.message.reply_text("❌ خطأ في الحذف\\.")
+            await q.message.reply_text("❌ خطأ في الحذف.")
 
 # ---------------- MESSAGES ----------------
 async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -520,7 +520,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Support msg to admin failed: {e}")
         clean_user_data(context, ["state"])
-        await update.message.reply_text("✅ تم الإرسال\\.", parse_mode="HTML")
+        await update.message.reply_text("✅ تم الإرسال.", parse_mode="HTML")
         return
 
     # --- إدخال معرف مستخدم (للرسالة الفردية) ---
@@ -533,7 +533,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             await update.message.reply_text(f"📨 أرسل الرسالة لـ `{target_id}`:", parse_mode="HTML")
         except ValueError:
-            await update.message.reply_text("❌ معرف غير صالح\\. أدخل أرقامًا فقط\\.", parse_mode="HTML")
+            await update.message.reply_text("❌ معرف غير صالح. أدخل أرقامًا فقط.", parse_mode="HTML")
         return
 
     # --- إرسال رسالة لمستخدم محدد ---
@@ -541,7 +541,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = context.user_data.get("target_user_id")
         if not target_id:
             clean_user_data(context, ["state", "target_user_id"])
-            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            await update.message.reply_text("❌ خطأ داخلي. أعد المحاولة.")
             return
         try:
             await context.bot.send_message(
@@ -549,13 +549,13 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📩 **رسالة من الإدارة**:\n\n{ text }",
                 parse_mode="HTML"
             )
-            await update.message.reply_text(f"✅ تم الإرسال إلى `{target_id}`\\.", parse_mode="HTML")
+            await update.message.reply_text(f"✅ تم الإرسال إلى `{target_id}`.", parse_mode="HTML")
         except Exception as e:
-            err = "❌ فشل الإرسال:\\n"
+            err = "❌ فشل الإرسال:n"
             if "bot was blocked" in str(e):
-                err += "• المستخدم حظر البوت\\n"
+                err += "• المستخدم حظر البوتn"
             elif "chat not found" in str(e):
-                err += "• المعرف خاطئ أو لم يبدأ محادثة\\n"
+                err += "• المعرف خاطئ أو لم يبدأ محادثةn"
             else:
                 err += f"• خطأ: {type(e).__name__}"
             logger.warning(f"Message to {target_id} failed: {e}")
@@ -570,18 +570,18 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = context.user_data.get("amount", 0)
         if not method or amount <= 0:
             clean_user_data(context, ["state", "withdraw_method", "amount"])
-            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            await update.message.reply_text("❌ خطأ داخلي. أعد المحاولة.")
             return
 
         # تحقق من صحة البيانات
         if method == "sham":
             if len(text) < 5 or " " in text or "HTTP" in text.upper():
-                await update.message.reply_text("❌ كود شام كاش غير صالح\\. أعد المحاولة\\.", parse_mode="HTML")
+                await update.message.reply_text("❌ كود شام كاش غير صالح. أعد المحاولة.", parse_mode="HTML")
                 return
             label = "كود شام كاش"
         else:  # usdt
             if not text.startswith("0x") or len(text) < 10:
-                await update.message.reply_text("❌ محفظة USDT غير صالحة\\. يجب أن تبدأ بـ `0x`\\.", parse_mode="HTML")
+                await update.message.reply_text("❌ محفظة USDT غير صالحة. يجب أن تبدأ بـ `0x`.", parse_mode="HTML")
                 return
             label = "محفظة USDT"
 
@@ -591,7 +591,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if row:
             clean_user_data(context, ["state", "withdraw_method", "amount"])
-            await update.message.reply_text("⏳ لديك طلب سحب معلق\\. انتظر معالجته أولًا\\.", parse_mode="HTML")
+            await update.message.reply_text("⏳ لديك طلب سحب معلق. انتظر معالجته أولًا.", parse_mode="HTML")
             return
 
         # حفظ مؤقت
@@ -600,10 +600,10 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         clean_user_data(context, ["state", "withdraw_method", "amount"])
 
-        method_text = "شام كاش" if method == "sham" else "USDT \\(BEP20\\)"
+        method_text = "شام كاش" if method == "sham" else "USDT (BEP20)"
         await update.message.reply_text(
             f"⚠️ تأكيد طلب السحب:\n"
-            f"💵 المبلغ: {amount}\\$\n"
+            f"💵 المبلغ: {amount}$\n"
             f"📌 الطريقة: {method_text}\n"
             f"📋 {label}: `{ text }`\n\n"
             f"هل تريد تأكيد الطلب؟",
@@ -621,7 +621,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method_id = context.user_data.get("payment_method_id")
         if not method_id:
             clean_user_data(context, ["state", "payment_method_id"])
-            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            await update.message.reply_text("❌ خطأ داخلي. أعد المحاولة.")
             return
         file_id = update.message.photo[-1].file_id
         try:
@@ -632,13 +632,13 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """, (uid, price, file_id, method_id))
             pid = row["id"]
             clean_user_data(context, ["state", "payment_method_id"])
-            await update.message.reply_text("📩 تم استلام صورة إشعار الدفع\\.", parse_mode="HTML")
+            await update.message.reply_text("📩 تم استلام صورة إشعار الدفع.", parse_mode="HTML")
             # إشعار الأدمن
             for admin in ADMINS:
                 try:
                     await context.bot.send_photo(
                         admin, photo=file_id,
-                        caption=f"طلب اشتراك جديد\\nالمستخدم: {uid}",
+                        caption=f"طلب اشتراك جديدnالمستخدم: {uid}",
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("✅", callback_data=f"approve:{pid}")],
@@ -649,7 +649,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Payment photo to admin failed: {e}")
         except Exception as e:
             logger.error(f"Payment insert failed: {e}")
-            await update.message.reply_text("❌ خطأ في تسجيل الدفع\\.", parse_mode="HTML")
+            await update.message.reply_text("❌ خطأ في تسجيل الدفع.", parse_mode="HTML")
         return
 
     # --- إضافة طريقة دفع: الاسم ---
@@ -666,7 +666,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = context.user_data.get("new_payment_name")
         if not name:
             clean_user_data(context, ["state", "new_payment_name"])
-            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            await update.message.reply_text("❌ خطأ داخلي. أعد المحاولة.")
             return
         try:
             await safe_db_execute(
@@ -674,10 +674,10 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (name, text)
             )
             clean_user_data(context, ["state", "new_payment_name"])
-            await update.message.reply_text("✅ تم الإضافة بنجاح\\!", parse_mode="HTML")
+            await update.message.reply_text("✅ تم الإضافة بنجاح!", parse_mode="HTML")
         except Exception as e:
             logger.error(f"Add payment method failed: {e}")
-            await update.message.reply_text("❌ خطأ في الحفظ\\.", parse_mode="HTML")
+            await update.message.reply_text("❌ خطأ في الحفظ.", parse_mode="HTML")
         return
 
     # --- إضافة روابط دفعة واحدة ---
@@ -686,7 +686,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = text.strip().splitlines()
         links = [line.strip() for line in lines if line.strip().startswith("http")]
         if not links:
-            await update.message.reply_text("❌ لم يتم العثور على روابط صالحة\\.", parse_mode="HTML")
+            await update.message.reply_text("❌ لم يتم العثور على روابط صالحة.", parse_mode="HTML")
             return
         added = 0
         for link in links:
@@ -701,7 +701,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     added += 1
             except Exception as e:
                 logger.error(f"Link insert failed: {link} | {e}")
-        await update.message.reply_text(f"✅ تم حفظ {added} رابط\\.", parse_mode="HTML")
+        await update.message.reply_text(f"✅ تم حفظ {added} رابط.", parse_mode="HTML")
         return
 
     # --- الموافقة على الاشتراك (أدخل رقم العملية) ---
@@ -709,7 +709,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pid = context.user_data.get("approve_pid")
         if not pid:
             clean_user_data(context, ["state", "approve_pid"])
-            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            await update.message.reply_text("❌ خطأ داخلي. أعد المحاولة.")
             return
         try:
             row = await safe_db_fetchone(
@@ -717,12 +717,12 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             if not row:
                 clean_user_data(context, ["state", "approve_pid"])
-                await update.message.reply_text("❌ الطلب غير موجود أو مُعالج مسبقًا\\.", parse_mode="HTML")
+                await update.message.reply_text("❌ الطلب غير موجود أو مُعالج مسبقًا.", parse_mode="HTML")
                 return
             user_id = row["user_id"]
             link_row = await safe_db_fetchone("SELECT id, link FROM channel_links ORDER BY id LIMIT 1")
             if not link_row:
-                await update.message.reply_text("❌ لا توجد روابط\\. أضف روابط أولًا\\.", parse_mode="HTML")
+                await update.message.reply_text("❌ لا توجد روابط. أضف روابط أولًا.", parse_mode="HTML")
                 return
             link_id = link_row["id"]
             link = link_row["link"]
@@ -754,17 +754,17 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     user_id,
-                    f"🎉 اشتراكك مفعل\\!\nالرابط:\n{ link }",
+                    f"🎉 اشتراكك مفعل!\nالرابط:\n{ link }",
                     parse_mode="HTML"
                 )
             except:
                 pass
             clean_user_data(context, ["state", "approve_pid"])
-            await update.message.reply_text(f"✅ تم تفعيل الاشتراك لـ {user_id}\\.", parse_mode="HTML")
+            await update.message.reply_text(f"✅ تم تفعيل الاشتراك لـ {user_id}.", parse_mode="HTML")
         except Exception as e:
             logger.error(f"Approve failed: {e}")
             clean_user_data(context, ["state", "approve_pid"])
-            await update.message.reply_text("❌ خطأ في المعالجة\\.", parse_mode="HTML")
+            await update.message.reply_text("❌ خطأ في المعالجة.", parse_mode="HTML")
         return
 
     # --- صرف السحب (أدخل رقم العملية) ---
@@ -772,7 +772,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wid = context.user_data.get("pay_wid")
         if not wid:
             clean_user_data(context, ["state", "pay_wid"])
-            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            await update.message.reply_text("❌ خطأ داخلي. أعد المحاولة.")
             return
         try:
             row = await safe_db_fetchone(
@@ -780,7 +780,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             if not row:
                 clean_user_data(context, ["state", "pay_wid"])
-                await update.message.reply_text("❌ طلب السحب غير موجود\\.", parse_mode="HTML")
+                await update.message.reply_text("❌ طلب السحب غير موجود.", parse_mode="HTML")
                 return
             u = row["user_id"]
             amt = row["amount"]
@@ -791,12 +791,12 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "UPDATE withdrawals SET status = 'PAID', transaction_id = %s WHERE id = %s",
                 (text, wid)
             )
-            method = "شام كاش" if method_type == "sham" else "USDT \\(BEP20\\)"
+            method = "شام كاش" if method_type == "sham" else "USDT (BEP20)"
             try:
                 await context.bot.send_message(
                     u,
-                    f"✅ تم صرف أرباحك بنجاح\\!\\n\\n"
-                    f"💵 المبلغ: {amt}\\$\n"
+                    f"✅ تم صرف أرباحك بنجاح!nn"
+                    f"💵 المبلغ: {amt}$\n"
                     f"🆔 رقم العملية: { text }\n"
                     f"📌 الطريقة: {method}\n"
                     f"📋 البيانات: `{ data or '' }`",
@@ -805,11 +805,11 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"User notification failed on payout: {e}")
             clean_user_data(context, ["state", "pay_wid"])
-            await update.message.reply_text(f"✅ تم صرف {amt}\\$ لـ {u}\\.", parse_mode="HTML")
+            await update.message.reply_text(f"✅ تم صرف {amt}$ لـ {u}.", parse_mode="HTML")
         except Exception as e:
             logger.error(f"Payout failed: {e}")
             clean_user_data(context, ["state", "pay_wid"])
-            await update.message.reply_text("❌ خطأ في المعالجة\\.", parse_mode="HTML")
+            await update.message.reply_text("❌ خطأ في المعالجة.", parse_mode="HTML")
         return
 
     # --- تعديل الإعدادات ---
@@ -822,9 +822,9 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 (key, str(val))
             )
             clean_user_data(context, ["state"])
-            await update.message.reply_text("✅ تم التعديل\\.", parse_mode="HTML")
+            await update.message.reply_text("✅ تم التعديل.", parse_mode="HTML")
         except ValueError:
-            await update.message.reply_text("❌ أدخل رقمًا صحيحًا\\.", parse_mode="HTML")
+            await update.message.reply_text("❌ أدخل رقمًا صحيحًا.", parse_mode="HTML")
         return
 
     # --- تعديل طريقة دفع ---
@@ -833,11 +833,11 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             m_id = int(state[len(STATE_EDIT_PM):])
             await safe_db_execute("UPDATE payment_methods SET name = %s WHERE id = %s", (text, m_id))
             clean_user_data(context, ["state"])
-            await update.message.reply_text("✅ تم التعديل\\.", parse_mode="HTML")
+            await update.message.reply_text("✅ تم التعديل.", parse_mode="HTML")
         except Exception as e:
             logger.error(f"Edit payment method failed: {e}")
             clean_user_data(context, ["state"])
-            await update.message.reply_text("❌ خطأ في الحفظ\\.", parse_mode="HTML")
+            await update.message.reply_text("❌ خطأ في الحفظ.", parse_mode="HTML")
         return
 
     # --- بث جماعي ---
@@ -847,7 +847,7 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_ids = [r["telegram_id"] for r in rows]
         total = len(user_ids)
         if total == 0:
-            await update.message.reply_text("📭 لا يوجد مستخدمون\\.", parse_mode="HTML")
+            await update.message.reply_text("📭 لا يوجد مستخدمون.", parse_mode="HTML")
             return
         success = 0
         for i in range(0, total, BATCH_SIZE):
@@ -858,11 +858,11 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # توقف عند فشل > 30%
             if i > 0 and success < (i + len(batch)) * 0.7:
                 await update.message.reply_text(
-                    f"⚠️ توقف مؤقت: نسبة فشل عالية ({success}/{i + len(batch)})\\.",
+                    f"⚠️ توقف مؤقت: نسبة فشل عالية ({success}/{i + len(batch)}).",
                     parse_mode="HTML"
                 )
                 break
-        await update.message.reply_text(f"✅ تم الإرسال إلى {success}/{total} مستخدم\\.", parse_mode="HTML")
+        await update.message.reply_text(f"✅ تم الإرسال إلى {success}/{total} مستخدم.", parse_mode="HTML")
         return
 
 # ---------------- COMMANDS ----------------
