@@ -6,6 +6,7 @@ from telegram.ext import (
 )
 from telegram.ext import Application
 from database import init_db, safe_db_execute, safe_db_fetchone, safe_db_fetchall
+from telegram.helpers import escape_markdown
 import logging
 import os
 import asyncio
@@ -34,15 +35,6 @@ STATE_APPROVE_PID = "admin:approve:pid"
 STATE_PAY_WID = "admin:pay:wid"
 STATE_EDIT_SETTING = "admin:edit:"
 STATE_EDIT_PM = "admin:edit_pm:"
-
-
-def escape_html(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-    )
-
 
 # ---------------- UTILS ----------------
 def parse_callback(data: str):
@@ -153,7 +145,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # ✅ رابط صحيح بدون مسافات
             link = f"https://t.me/news_acc_bot?start={uid}"
             await q.message.reply_text(
-                f"🔗 رابطك:\n{escape_markdown(link, version=2)}\n💰 العمولة: {reward}\\$",
+                f"🔗 رابطك:\n{link}\n💰 العمولة: {reward}\$",
                 disable_web_page_preview=True,
                 parse_mode="HTML"
             )
@@ -893,10 +885,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
