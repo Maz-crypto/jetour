@@ -1,8 +1,7 @@
-# database.py
+# database.py — متوافق مع Python 3.13 على Render
 import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import asyncio
+from psycopg import connect
+from psycopg.rows import dict_row
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,10 +13,11 @@ if not DATABASE_URL:
 _conn = None
 
 def get_connection():
+    """إرجاع اتصال معاد الاستخدام مع دعم dict row"""
     global _conn
     if _conn is None or _conn.closed:
         try:
-            _conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            _conn = connect(DATABASE_URL, row_factory=dict_row)
             logger.info("✅ DB connection established.")
         except Exception as e:
             logger.critical(f"❌ Failed to connect to DB: {e}")
@@ -25,54 +25,50 @@ def get_connection():
     return _conn
 
 async def safe_db_execute(query: str, params: tuple = None):
+    """تنفيذ استعلام دون إرجاع (INSERT/UPDATE/DELETE) مع دعم إعادة الاتصال"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(query, params or ())
-            conn.commit()
-    except psycopg2.OperationalError:
-        _conn.close()
-        conn = get_connection()
-        with conn.cursor() as cur:
-            cur.execute(query, params or ())
-            conn.commit()
+            cur.execute(query, params)
+        conn.commit()
     except Exception as e:
-        logger.error(f"DB execute error: {query} | {e}")
-        raise
+        conn.rollback()
+        # محاولة إعادة الاتصال مرة واحدة فقط
+        if hasattr(e, 'pgcode') and e.pgcode == '57P03':  # server shutdown
+            global _conn
+            _conn = None
+            conn = get_connection()
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+            conn.commit()
+        else:
+            logger.error(f"DB execute error: {e}")
+            raise
 
 async def safe_db_fetchone(query: str, params: tuple = None):
+    """جلب صف واحد بأمان"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(query, params or ())
-            return cur.fetchone()
-    except psycopg2.OperationalError:
-        _conn.close()
-        conn = get_connection()
-        with conn.cursor() as cur:
-            cur.execute(query, params or ())
+            cur.execute(query, params)
             return cur.fetchone()
     except Exception as e:
-        logger.error(f"DB fetchone error: {query} | {e}")
+        logger.error(f"DB fetchone error: {e}")
         raise
 
 async def safe_db_fetchall(query: str, params: tuple = None):
+    """جلب جميع الصفوف بأمان"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(query, params or ())
-            return cur.fetchall()
-    except psycopg2.OperationalError:
-        _conn.close()
-        conn = get_connection()
-        with conn.cursor() as cur:
-            cur.execute(query, params or ())
+            cur.execute(query, params)
             return cur.fetchall()
     except Exception as e:
-        logger.error(f"DB fetchall error: {query} | {e}")
+        logger.error(f"DB fetchall error: {e}")
         raise
 
 def init_db():
+    """تهيئة الجداول (يُنادى مرة واحدة في البداية)"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -96,6 +92,7 @@ def init_db():
                     value TEXT NOT NULL
                 );
             """)
+            # defaults
             defaults = [("subscription_price", "5"), ("referral_reward", "1"), ("min_withdraw", "2")]
             for k, v in defaults:
                 cur.execute(
@@ -143,8 +140,8 @@ def init_db():
                     link TEXT UNIQUE NOT NULL
                 );
             """)
-            conn.commit()
-            logger.info("✅ Database initialized.")
+        conn.commit()
+        logger.info("✅ Database initialized.")
     except Exception as e:
         conn.rollback()
         logger.critical(f"❌ init_db failed: {e}")
