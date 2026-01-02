@@ -1,57 +1,86 @@
+# jetoor.py
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, ContextTypes, filters
 )
-from database import init_db, cursor, conn, get_setting, set_setting
-from datetime import datetime, timedelta
+from database import init_db, safe_db_execute, safe_db_fetchone, safe_db_fetchall
+from telegram.helpers import escape_markdown
 import logging
 import os
-from telegram.helpers import escape_markdown
+import asyncio
+from typing import Optional
 
-# ✅ قراءة المتغيرات من البيئة
+# ---------------- CONFIG ----------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMINS = [int(x.strip()) for x in os.environ["ADMINS"].split(",") if x.strip()]
+BATCH_SIZE = 30
 
-init_db()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ---------------- STATE CONSTANTS ----------------
+STATE_IDLE = "idle"
+STATE_WITHDRAW_METHOD = "withdraw:method"
+STATE_WITHDRAW_DATA = "withdraw:data"
+STATE_SUPPORT = "support"
+STATE_BROADCAST = "broadcast"
+STATE_AWAITING_USER_ID = "msg:user_id"
+STATE_TARGET_MESSAGE = "msg:content"
+STATE_AWAITING_PAYMENT = "payment:proof"
+STATE_ADD_PAYMENT_NAME = "payment:add:name"
+STATE_ADD_PAYMENT_LINK = "payment:add:link"
+STATE_APPROVE_PID = "admin:approve:pid"
+STATE_PAY_WID = "admin:pay:wid"
+STATE_EDIT_SETTING = "admin:edit:"
+STATE_EDIT_PM = "admin:edit_pm:"
+
+# ---------------- UTILS ----------------
+def parse_callback( str):
+    try:
+        parts = data.split(":", 2)
+        action = parts[0]
+        id_val = parts[1] if len(parts) > 1 else None
+        extra = parts[2] if len(parts) > 2 else None
+        return action, id_val, extra
+    except:
+        return None, None, None
+
+def clean_user_data(context, keys=None):
+    if keys:
+        for k in keys:
+            context.user_data.pop(k, None)
+    else:
+        context.user_data.clear()
+
+def confirm_menu(yes="✅ نعم", no="❌ لا", yes_data="confirm:yes", no_data="cancel:op"):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(yes, callback_data=yes_data),
+                                   InlineKeyboardButton(no, callback_data=no_data)]])
 
 # ---------------- ERROR HANDLER ----------------
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(f"Exception while handling an update: {context.error}", exc_info=True)
-
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Exception: {context.error}", exc_info=True)
 
 # ---------------- MENUS ----------------
 def user_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📌 الاشتراك", callback_data="subscribe")],
-        [InlineKeyboardButton("💰 الإحالة", callback_data="referral")],
-        [InlineKeyboardButton("📊 رصيدي", callback_data="balance")],
-        [InlineKeyboardButton("📤 سحب الأرباح", callback_data="withdraw")],
-        [InlineKeyboardButton("🛠️ الدعم", callback_data="support")]
+        [InlineKeyboardButton("📌 الاشتراك", callback_data="menu:subscribe")],
+        [InlineKeyboardButton("💰 الإحالة", callback_data="menu:referral")],
+        [InlineKeyboardButton("📊 رصيدي", callback_data="menu:balance")],
+        [InlineKeyboardButton("📤 سحب الأرباح", callback_data="menu:withdraw")],
+        [InlineKeyboardButton("🛠️ الدعم", callback_data="menu:support")]
     ])
-
 
 def admin_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🧾 طلبات الاشتراك", callback_data="admin_payments")],
-        [InlineKeyboardButton("💸 طلبات السحب", callback_data="admin_withdraws")],
-        [InlineKeyboardButton("⚙️ الإعدادات", callback_data="admin_settings")],
-        [InlineKeyboardButton("💳 طرق الدفع", callback_data="payment_methods")],
-        [InlineKeyboardButton("🔗 إدارة روابط القناة", callback_data="channel_links")],
-        [InlineKeyboardButton("📢 رسالة جماعية", callback_data="broadcast")],
-        [InlineKeyboardButton("📨 رسالة لمستخدم", callback_data="send_to_user")]
+        [InlineKeyboardButton("🧾 طلبات الاشتراك", callback_data="admin:payments")],
+        [InlineKeyboardButton("💸 طلبات السحب", callback_data="admin:withdraws")],
+        [InlineKeyboardButton("⚙️ الإعدادات", callback_data="admin:settings")],
+        [InlineKeyboardButton("💳 طرق الدفع", callback_data="admin:payment_methods")],
+        [InlineKeyboardButton("🔗 روابط القناة", callback_data="admin:channel_links")],
+        [InlineKeyboardButton("📢 رسالة جماعية", callback_data="admin:broadcast")],
+        [InlineKeyboardButton("📨 رسالة لمستخدم", callback_data="admin:send_to_user")]
     ])
-
-
-def confirm_menu(yes="✅ نعم", no="❌ لا", data_yes="confirm_yes", data_no="confirm_no"):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(yes, callback_data=data_yes),
-         InlineKeyboardButton(no, callback_data=data_no)]
-    ])
-
 
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -61,14 +90,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ref == user.id:
         ref = None
 
-    cursor.execute("""
+    await safe_db_execute("""
         INSERT INTO users (telegram_id, username, referrer_id)
         VALUES (%s, %s, %s)
         ON CONFLICT (telegram_id) DO NOTHING
     """, (user.id, user.username, ref))
-    conn.commit()
 
-    price = get_setting("subscription_price")
+    price_row = await safe_db_fetchone("SELECT value FROM settings WHERE key = 'subscription_price'")
+    price = price_row["value"] if price_row else "5"
     await update.message.reply_text(
         f"🔐 مرحبًا بك في بوت الاشتراك في قناة الأخبار العاجلة\n\n"
         f"📌 اشترك الآن للوصول إلى المحتوى الحصري\n"
@@ -79,585 +108,579 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=user_menu()
     )
 
-
 # ---------------- CALLBACKS ----------------
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    action, id_val, extra = parse_callback(q.data)
+    if not action:
+        await q.message.reply_text("❌ طلب غير صالح\\.")
+        return
+
     uid = q.from_user.id
 
     # ---------- USER ----------
-    if q.data == "subscribe":
-        cursor.execute("SELECT id, name, barcode FROM payment_methods")
-        methods = cursor.fetchall()
-        if not methods:
-            await q.message.reply_text("💳 لا توجد طرق دفع متاحة\\. تواصل مع الدعم\\.")
-            return
-        buttons = [[InlineKeyboardButton(name, callback_data=f"paymethod_{m_id}")] for m_id, name, _ in methods]
-        await q.message.reply_text("💳 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(buttons))
-        return
-
-    elif q.data.startswith("paymethod_"):
-        method_id = int(q.data.split("_")[1])
-        context.user_data["awaiting_payment"] = True
-        context.user_data["payment_method_id"] = method_id
-        cursor.execute("SELECT name, barcode FROM payment_methods WHERE id = %s", (method_id,))
-        row = cursor.fetchone()
-        name = row["name"]
-        barcode = row["barcode"]
-        escaped_name = escape_markdown(name, version=2)
-        escaped_barcode = escape_markdown(barcode, version=2)
-        await q.message.reply_text(
-            f"💵 أرسل **صورة إشعار الدفع** \\(لقطة من تطبيق الدفع\\)\n"
-            f"📱 الطريقة: *{escaped_name}*\n"
-            f"📎 الرابط: `{escaped_barcode}`",
-            parse_mode="MarkdownV2"
-        )
-        return
-
-    elif q.data == "referral":
-        cursor.execute("SELECT subscription_active FROM users WHERE telegram_id = %s", (uid,))
-        row = cursor.fetchone()
-        active = row["subscription_active"] if row else 0
-        if active != 1:
-            await q.message.reply_text("❌ يجب أن تكون مشتركًا لتفعيل رابط الإحالة\\.")
-            return
-        reward = get_setting("referral_reward")
-        # ✅ إصلاح الرابط: لا مسافات
-        link = f"https://t.me/news_acc_bot?start={uid}"
-        escaped_link = escape_markdown(link, version=2)
-        await q.message.reply_text(
-            f"🔗 رابطك:\n{escaped_link}\n💰 العمولة: {reward}\\$",
-            disable_web_page_preview=True,
-            parse_mode="MarkdownV2"
-        )
-        return
-
-    elif q.data == "balance":
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id = %s", (uid,))
-        row = cursor.fetchone()
-        bal = row["referral_balance"] if row else 0
-        await q.message.reply_text(f"💵 رصيدك: {bal}\\$", parse_mode="MarkdownV2")
-        return
-
-    elif q.data == "withdraw":
-        min_w = get_setting("min_withdraw")
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id = %s", (uid,))
-        row = cursor.fetchone()
-        bal = row["referral_balance"] if row else 0
-        if bal < min_w:
+    if action == "menu":
+        if id_val == "subscribe":
+            rows = await safe_db_fetchall("SELECT id, name, barcode FROM payment_methods")
+            if not rows:
+                await q.message.reply_text("💳 لا توجد طرق دفع متاحة\\. تواصل مع الدعم\\.")
+                return
+            buttons = [[InlineKeyboardButton(r["name"], callback_data=f"paymethod:{r['id']}")] for r in rows]
+            await q.message.reply_text("💳 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(buttons))
+        
+        elif id_val == "referral":
+            row = await safe_db_fetchone(
+                "SELECT subscription_active FROM users WHERE telegram_id = %s", (uid,)
+            )
+            active = row["subscription_active"] if row else 0
+            if active != 1:
+                await q.message.reply_text("❌ يجب أن تكون مشتركًا لتفعيل رابط الإحالة\\.")
+                return
+            reward = (await safe_db_fetchone(
+                "SELECT value FROM settings WHERE key = 'referral_reward'"
+            ))["value"]
+            # ✅ رابط صحيح بدون مسافات
+            link = f"https://t.me/news_acc_bot?start={uid}"
             await q.message.reply_text(
-                f"❌ الحد الأدنى للسحب هو {min_w}\\$\\. رصيدك: {bal}\\$\\.",
+                f"🔗 رابطك:\n{escape_markdown(link, version=2)}\n💰 العمولة: {reward}\\$",
+                disable_web_page_preview=True,
                 parse_mode="MarkdownV2"
             )
-        else:
-            await q.message.reply_text(
-                f"💰 رصيدك جاهز للسحب: {bal}\\$\\n\\nاختر طريقة الاستلام:",
-                parse_mode="MarkdownV2",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("شام كاش", callback_data="withdraw_sham")],
-                    [InlineKeyboardButton("USDT \\(BEP20\\)", callback_data="withdraw_usdt")],
-                    [InlineKeyboardButton("إلغاء", callback_data="cancel")]
-                ])
+        
+        elif id_val == "balance":
+            row = await safe_db_fetchone(
+                "SELECT referral_balance FROM users WHERE telegram_id = %s", (uid,)
             )
-        return
+            bal = row["referral_balance"] if row else 0
+            await q.message.reply_text(f"💵 رصيدك: {bal}\\$", parse_mode="MarkdownV2")
+        
+        elif id_val == "withdraw":
+            row = await safe_db_fetchone(
+                "SELECT referral_balance FROM users WHERE telegram_id = %s", (uid,)
+            )
+            bal = float(row["referral_balance"]) if row else 0.0
+            min_w = float((await safe_db_fetchone(
+                "SELECT value FROM settings WHERE key = 'min_withdraw'"
+            ))["value"])
+            if bal < min_w:
+                await q.message.reply_text(
+                    f"❌ الحد الأدنى للسحب هو {min_w}\\$\\. رصيدك: {bal}\\$\\.",
+                    parse_mode="MarkdownV2"
+                )
+            else:
+                context.user_data.update({
+                    "state": STATE_WITHDRAW_METHOD,
+                    "amount": bal
+                })
+                await q.message.reply_text(
+                    f"💰 رصيدك جاهز للسحب: {bal}\\$\\n\\nاختر طريقة الاستلام:",
+                    parse_mode="MarkdownV2",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("شام كاش", callback_data="withdraw:sham")],
+                        [InlineKeyboardButton("USDT \\(BEP20\\)", callback_data="withdraw:usdt")],
+                        [InlineKeyboardButton("إلغاء", callback_data="cancel:op")]
+                    ])
+                )
+        
+        elif id_val == "support":
+            context.user_data["state"] = STATE_SUPPORT
+            await q.message.reply_text("✉️ اكتب رسالتك:")
 
-    elif q.data == "withdraw_sham":
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id = %s", (uid,))
-        row = cursor.fetchone()
-        bal = row["referral_balance"] if row else 0
+    elif action == "paymethod":
+        try:
+            method_id = int(id_val)
+            context.user_data.update({
+                "state": STATE_AWAITING_PAYMENT,
+                "payment_method_id": method_id
+            })
+            row = await safe_db_fetchone(
+                "SELECT name, barcode FROM payment_methods WHERE id = %s", (method_id,)
+            )
+            if not row:
+                await q.message.reply_text("❌ طريقة دفع غير موجودة\\.")
+                return
+            name = row["name"]
+            barcode = row["barcode"]
+            await q.message.reply_text(
+                f"💵 أرسل **صورة إشعار الدفع** \\(لقطة من تطبيق الدفع\\)\n"
+                f"📱 الطريقة: *{escape_markdown(name, version=2)}*\n"
+                f"📎 الرابط: `{escape_markdown(barcode, version=2)}`",
+                parse_mode="MarkdownV2"
+            )
+        except (ValueError, TypeError):
+            await q.message.reply_text("❌ معرّف غير صالح\\.")
+
+    elif action == "withdraw":
         context.user_data.update({
-            "withdraw_method": "sham",
-            "withdraw_amount": bal
+            "state": STATE_WITHDRAW_DATA,
+            "withdraw_method": id_val  # sham أو usdt
         })
-        await q.message.reply_text(
-            "🔢 أرسل **كود شام كاش** لاستلام المبلغ:\n"
-            "مثال: `SC123456` أو `123456789`",
-            parse_mode="MarkdownV2"
-        )
-        return
+        msg = "كود شام كاش:" if id_val == "sham" else "محفظة USDT \\(BEP20\\):"
+        await q.message.reply_text(f"🔢 {msg}", parse_mode="MarkdownV2")
 
-    elif q.data == "withdraw_usdt":
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id = %s", (uid,))
-        row = cursor.fetchone()
-        bal = row["referral_balance"] if row else 0
-        context.user_data.update({
-            "withdraw_method": "usdt",
-            "withdraw_amount": bal
-        })
-        await q.message.reply_text(
-            "👛 أرسل **محفظة USDT \\(BEP20\\)** لاستلام المبلغ:\n"
-            "مثال: `0x123\\.\\.\\.abc`",
-            parse_mode="MarkdownV2"
-        )
-        return
+    elif action == "confirm" and id_val == "withdraw":
+        wd = context.user_data.pop("temp_withdraw", None)
+        if not wd:
+            await q.message.edit_text("❌ بيانات مفقودة أو منتهية\\.", parse_mode="MarkdownV2")
+            return
+        try:
+            row = await safe_db_fetchone("""
+                INSERT INTO withdrawals (user_id, amount, sham_cash_link, method, status)
+                VALUES (%s, %s, %s, %s, 'PENDING')
+                RETURNING id
+            """, (uid, wd["amount"], wd["data"], wd["method"]))
+            wid = row["id"]
+            clean_user_data(context, ["temp_withdraw"])
+            await q.message.edit_text(f"✅ تم إرسال طلب السحب #{wid} للأدمن\\.", parse_mode="MarkdownV2")
+            # إشعار الأدمن
+            method_text = "شام كاش" if wd["method"] == "sham" else "USDT \\(BEP20\\)"
+            for admin in ADMINS:
+                try:
+                    await context.bot.send_message(
+                        admin,
+                        f"💸 طلب سحب جديد #{wid}\n"
+                        f"👤 المستخدم: {uid}\n"
+                        f"💵 المبلغ: {wd['amount']}\\$\n"
+                        f"📌 الطريقة: {method_text}\n"
+                        f"📋 البيانات: `{escape_markdown(wd['data'], version=2)}`",
+                        parse_mode="MarkdownV2",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅ تأكيد", callback_data=f"pay:{wid}")],
+                            [InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_w:{wid}")],
+                            [InlineKeyboardButton("ℹ️ استعلام", callback_data=f"inquiry:{uid}")]
+                        ])
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to notify admin {admin}: {e}")
+        except Exception as e:
+            logger.error(f"Withdraw insert failed: {e}")
+            await q.message.edit_text("❌ خطأ في معالجة الطلب\\.", parse_mode="MarkdownV2")
 
-    elif q.data == "support":
-        context.user_data["support"] = True
-        await q.message.reply_text("✉️ اكتب رسالتك:")
-        return
-
-    # ✅ تأكيد السحب من الزر (بدون تكرار)
-    elif q.data == "confirm_withdraw":
-        await _handle_confirm_withdraw(q, context, uid)
-        return
-
-    elif q.data == "edit_withdraw_data":
+    elif action == "edit" and id_val == "withdraw_data":
         method = context.user_data.get("withdraw_method_temp", "sham")
         bal = context.user_data.get("withdraw_amount", 0)
         msg = "أعد إدخال كود شام كاش:" if method == "sham" else "أعد إدخال محفظة USDT \\(BEP20\\):"
+        context.user_data["state"] = STATE_WITHDRAW_DATA
         context.user_data["withdraw_method"] = method
         context.user_data.pop("withdraw_data_temp", None)
         await q.message.edit_text(f"{msg}\n💵 المبلغ: {bal}\\$", parse_mode="MarkdownV2")
-        return
+
+    elif action == "cancel":
+        clean_user_data(context)
+        await q.message.reply_text("❌ تم الإلغاء\\.", parse_mode="MarkdownV2")
 
     # ---------- ADMIN ----------
     if uid not in ADMINS:
         return
 
-    if q.data == "admin_payments":
-        cursor.execute("SELECT id, user_id, amount, proof FROM payments WHERE status = 'PENDING'")
-        rows = cursor.fetchall()
-        if not rows:
-            await q.message.reply_text("📭 لا توجد طلبات\\.", parse_mode="MarkdownV2")
-            return
-        for row in rows:
-            pid = row["id"]
-            u = row["user_id"]
-            amt = row["amount"]
-            proof = row["proof"]
-            await context.bot.send_photo(
-                uid, photo=proof,
-                caption=f"🧾 اشتراك #{pid}\n👤 {u}\n💵 {amt}\\$",
-                parse_mode="MarkdownV2",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅", callback_data=f"approve_{pid}"),
-                     InlineKeyboardButton("❌", callback_data=f"reject_{pid}")]
-                ])
+    if action == "admin":
+        if id_val == "payments":
+            rows = await safe_db_fetchall(
+                "SELECT id, user_id, amount, proof FROM payments WHERE status = 'PENDING'"
             )
-        return
-
-    elif q.data.startswith("approve_"):
-        pid = int(q.data.split("_")[1])
-        context.user_data["approve_pid"] = pid
-        await q.message.reply_text("🔢 أدخل رقم العملية:")
-        return
-
-    elif q.data.startswith("reject_"):
-        pid = int(q.data.split("_")[1])
-        await q.message.reply_text(
-            "⚠️ تأكيد الرفض؟",
-            reply_markup=confirm_menu("✅", "❌", f"confirm_reject_{pid}", "cancel")
-        )
-        return
-
-    elif q.data.startswith("confirm_reject_"):
-        pid = int(q.data.split("_")[2])
-        cursor.execute("UPDATE payments SET status = 'REJECTED' WHERE id = %s", (pid,))
-        conn.commit()
-        await q.message.reply_text("❌ تم الرفض\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data == "admin_withdraws":
-        cursor.execute("""
-            SELECT id, user_id, amount, sham_cash_link, method
-            FROM withdrawals
-            WHERE status = 'PENDING'
-        """)
-        rows = cursor.fetchall()
-        if not rows:
-            await q.message.reply_text("📭 لا توجد طلبات سحب\\.", parse_mode="MarkdownV2")
-            return
-        for r in rows:
-            wid = r["id"]
-            u = r["user_id"]
-            amt = r["amount"]
-            data = r["sham_cash_link"] or "---"
-            method_type = r["method"]
-            method = "شام كاش" if method_type == "sham" else "USDT \\(BEP20\\)" if method_type == "usdt" else "غير معروف"
-            escaped_data = escape_markdown(data, version=2)
-            await q.message.reply_text(
-                f"💸 طلب سحب #{wid}\n"
-                f"👤 المستخدم: {u}\n"
-                f"💵 المبلغ: {amt}\\$\n"
-                f"📌 الطريقة: {method}\n"
-                f"📋 البيانات: `{escaped_data}`",
-                parse_mode="MarkdownV2",
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("✅ تأكيد", callback_data=f"pay_{wid}"),
-                        InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_w_{wid}"),
-                        InlineKeyboardButton("ℹ️ استعلام", callback_data=f"inquiry_{u}")
-                    ]
-                ])
-            )
-        return
-
-    elif q.data.startswith("inquiry_"):
-        try:
-            user_id = int(q.data.split("_")[1])
-            cursor.execute("SELECT * FROM users WHERE telegram_id = %s", (user_id,))
-            user = cursor.fetchone()
-            if not user:
-                await q.message.reply_text("❌ المستخدم غير موجود\\.", parse_mode="MarkdownV2")
+            if not rows:
+                await q.message.reply_text("📭 لا توجد طلبات\\.", parse_mode="MarkdownV2")
                 return
-            tid = user["telegram_id"]
-            username = user["username"] or "---"
-            referrer = user["referrer_id"] or "---"
-            balance = user["referral_balance"]
-            active = user["subscription_active"]
-            end_date = user["subscription_end"] or "---"
-            status = "نشط" if active == 1 else "غير نشط"
+            for r in rows:
+                try:
+                    await context.bot.send_photo(
+                        uid, photo=r["proof"],
+                        caption=f"🧾 اشتراك #{r['id']}\n👤 {r['user_id']}\n💵 {r['amount']}\\$",
+                        parse_mode="MarkdownV2",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅", callback_data=f"approve:{r['id']}"),
+                             InlineKeyboardButton("❌", callback_data=f"reject:{r['id']}")]
+                        ])
+                    )
+                except Exception as e:
+                    logger.warning(f"Photo send failed: {e}")
+        
+        elif id_val == "withdraws":
+            rows = await safe_db_fetchall("""
+                SELECT id, user_id, amount, sham_cash_link, method
+                FROM withdrawals WHERE status = 'PENDING'
+            """)
+            if not rows:
+                await q.message.reply_text("📭 لا توجد طلبات سحب\\.", parse_mode="MarkdownV2")
+                return
+            for r in rows:
+                bal_row = await safe_db_fetchone(
+                    "SELECT referral_balance FROM users WHERE telegram_id = %s", (r["user_id"],)
+                )
+                bal = bal_row["referral_balance"] if bal_row else 0
+                method = "شام كاش" if r["method"] == "sham" else "USDT \\(BEP20\\)"
+                await q.message.reply_text(
+                    f"💸 طلب سحب #{r['id']}\n"
+                    f"👤 المستخدم: {r['user_id']}\n"
+                    f"💵 المبلغ: {r['amount']}\\$\n"
+                    f"📊 رصيده الحالي: {bal}\\$\n"
+                    f"📌 الطريقة: {method}\n"
+                    f"📋 البيانات: `{escape_markdown(r['sham_cash_link'] or '---', version=2)}`",
+                    parse_mode="MarkdownV2",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ تأكيد", callback_data=f"pay:{r['id']}"),
+                         InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_w:{r['id']}"),
+                         InlineKeyboardButton("ℹ️ استعلام", callback_data=f"inquiry:{r['user_id']}")]
+                    ])
+                )
+        
+        elif id_val == "settings":
+            p = (await safe_db_fetchone("SELECT value FROM settings WHERE key = 'subscription_price'"))["value"]
+            r = (await safe_db_fetchone("SELECT value FROM settings WHERE key = 'referral_reward'"))["value"]
+            m = (await safe_db_fetchone("SELECT value FROM settings WHERE key = 'min_withdraw'"))["value"]
             await q.message.reply_text(
-                f"ℹ️ استعلام عن المستخدم {tid}:\n"
-                f"👤 المعرف: @{escape_markdown(username, version=2)}\n"
-                f"💰 الرصيد: {balance}\\$\n"
-                f"📌 حالة الاشتراك: {status}\n"
-                f"🗓️ انتهاء الاشتراك: {end_date}\n"
-                f"👥 المُحيل: {referrer}",
-                parse_mode="MarkdownV2"
-            )
-        except (ValueError, IndexError, KeyError) as e:
-            logger.warning(f"Invalid inquiry callback: {q.data}, error: {e}")
-            await q.message.reply_text("❌ طلب غير صالح\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data.startswith("cancel_w_"):
-        try:
-            wid = int(q.data.split("_")[2])
-            await q.message.reply_text(
-                "⚠️ تأكيد إلغاء طلب السحب؟",
+                f"⚙️ الإعدادات:\n- السعر: {p}\\$\n- العمولة: {r}\\$\n- الحد الأدنى: {m}\\$",
+                parse_mode="MarkdownV2",
                 reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("✅ نعم", callback_data=f"confirm_cancel_w_{wid}"),
-                        InlineKeyboardButton("❌ لا", callback_data="cancel")
-                    ]
+                    [InlineKeyboardButton("✏️ سعر", callback_data="edit:price")],
+                    [InlineKeyboardButton("✏️ عمولة", callback_data="edit:ref")],
+                    [InlineKeyboardButton("✏️ حد السحب", callback_data="edit:min")]
                 ])
             )
-        except (ValueError, IndexError):
-            await q.message.reply_text("❌ طلب غير صالح\\.", parse_mode="MarkdownV2")
-        return
+        
+        elif id_val == "payment_methods":
+            rows = await safe_db_fetchall("SELECT id, name FROM payment_methods")
+            buttons = [[InlineKeyboardButton("➕ إضافة طريقة دفع", callback_data="add_payment:new")]]
+            for r in rows:
+                buttons.append([
+                    InlineKeyboardButton("✏️ تعديل", callback_data=f"edit_pm:{r['id']}"),
+                    InlineKeyboardButton("🗑️ حذف", callback_data=f"del_pm:{r['id']}")
+                ])
+                buttons.append([InlineKeyboardButton(f"💳 {r['name']}", callback_data="cancel:op")])
+            buttons.append([InlineKeyboardButton("🔙 رجوع", callback_data="cancel:op")])
+            await q.message.reply_text(
+                "💳 طرق الدفع المتوفرة:" if rows else "💳 لا توجد طرق دفع مُضافة بعد\\.",
+                parse_mode="MarkdownV2",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        
+        elif id_val == "channel_links":
+            rows = await safe_db_fetchall("SELECT id, link FROM channel_links")
+            buttons = [[InlineKeyboardButton("➕ إضافة روابط", callback_data="add_links:bulk")]]
+            for r in rows:
+                short = (r["link"][:25] + "…") if len(r["link"]) > 25 else r["link"]
+                buttons.append([InlineKeyboardButton(f"🗑️ {escape_markdown(short, version=2)}", callback_data=f"del_link:{r['id']}")])
+            buttons.append([InlineKeyboardButton("🔙", callback_data="cancel:op")])
+            await q.message.reply_text("🔗 روابط القناة:", reply_markup=InlineKeyboardMarkup(buttons))
+        
+        elif id_val == "broadcast":
+            context.user_data["state"] = STATE_BROADCAST
+            await q.message.reply_text("📢 أرسل الرسالة الجماعية:")
+        
+        elif id_val == "send_to_user":
+            context.user_data["state"] = STATE_AWAITING_USER_ID
+            await q.message.reply_text("👤 أرسل معرف المستخدم \\(ID\\):", parse_mode="MarkdownV2")
 
-    elif q.data.startswith("confirm_cancel_w_"):
+    elif action == "approve":
         try:
-            wid = int(q.data.split("_")[3])
-            cursor.execute("SELECT user_id FROM withdrawals WHERE id = %s", (wid,))
-            row = cursor.fetchone()
+            pid = int(id_val)
+            context.user_data.update({
+                "state": STATE_APPROVE_PID,
+                "approve_pid": pid
+            })
+            await q.message.reply_text("🔢 أدخل رقم العملية:")
+        except (ValueError, TypeError):
+            await q.message.reply_text("❌ معرّف غير صالح\\.")
+
+    elif action == "reject":
+        await q.message.reply_text("⚠️ تأكيد الرفض؟", reply_markup=confirm_menu("✅", "❌", f"confirm_reject:{id_val}", "cancel:op"))
+
+    elif action == "confirm_reject":
+        try:
+            pid = int(id_val)
+            await safe_db_execute("UPDATE payments SET status = 'REJECTED' WHERE id = %s", (pid,))
+            await q.message.reply_text("❌ تم الرفض\\.", parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.error(f"Reject failed: {e}")
+            await q.message.reply_text("❌ خطأ في المعالجة\\.")
+
+    elif action == "pay":
+        try:
+            wid = int(id_val)
+            context.user_data.update({
+                "state": STATE_PAY_WID,
+                "pay_wid": wid
+            })
+            await q.message.reply_text("🔢 أدخل رقم العملية:")
+        except (ValueError, TypeError):
+            await q.message.reply_text("❌ معرّف غير صالح\\.")
+
+    elif action == "cancel_w":
+        await q.message.reply_text("⚠️ تأكيد إلغاء طلب السحب؟", reply_markup=confirm_menu("✅", "❌", f"confirm_cancel_w:{id_val}", "cancel:op"))
+
+    elif action == "confirm_cancel_w":
+        try:
+            wid = int(id_val)
+            row = await safe_db_fetchone("SELECT user_id FROM withdrawals WHERE id = %s", (wid,))
             if not row:
-                await q.message.reply_text("❌ الطلب غير موجود\\.", parse_mode="MarkdownV2")
+                await q.message.reply_text("❌ الطلب غير موجود\\.")
                 return
             u = row["user_id"]
-            cursor.execute("UPDATE withdrawals SET status = 'CANCELLED' WHERE id = %s", (wid,))
-            conn.commit()
+            await safe_db_execute("UPDATE withdrawals SET status = 'CANCELLED' WHERE id = %s", (wid,))
             try:
                 await context.bot.send_message(
                     u,
                     "❌ تم إلغاء طلب سحب أرباحك\\. تواصل مع الدعم للمزيد\\.",
                     parse_mode="MarkdownV2"
                 )
-            except Exception as e:
-                logger.warning(f"Failed to notify user {u} on cancel: {e}")
+            except:
+                pass
             await q.message.reply_text("✅ تم الإلغاء\\.", parse_mode="MarkdownV2")
         except Exception as e:
-            logger.error(f"Error in confirm_cancel_w: {e}")
-            await q.message.reply_text("❌ خطأ في المعالجة\\.", parse_mode="MarkdownV2")
-        return
+            logger.error(f"Cancel withdrawal failed: {e}")
+            await q.message.reply_text("❌ خطأ في المعالجة\\.")
 
-    elif q.data.startswith("pay_"):
+    elif action == "inquiry":
         try:
-            wid = int(q.data.split("_")[1])
-            context.user_data["pay_wid"] = wid
-            await q.message.reply_text("🔢 أدخل رقم العملية:")
-        except (ValueError, IndexError):
-            await q.message.reply_text("❌ طلب غير صالح\\.", parse_mode="MarkdownV2")
-        return
+            user_id = int(id_val)
+            row = await safe_db_fetchone("SELECT * FROM users WHERE telegram_id = %s", (user_id,))
+            if not row:
+                await q.message.reply_text("❌ المستخدم غير موجود\\.", parse_mode="MarkdownV2")
+                return
+            status = "نشط" if row["subscription_active"] == 1 else "غير نشط"
+            await q.message.reply_text(
+                f"ℹ️ استعلام عن المستخدم {row['telegram_id']}:\n"
+                f"👤 المعرف: @{row['username'] or '---'}\n"
+                f"💰 الرصيد: {row['referral_balance']}\\$\n"
+                f"📌 حالة الاشتراك: {status}\n"
+                f"🗓️ انتهاء الاشتراك: {row['subscription_end'] or '---'}\n"
+                f"👥 المُحيل: {row['referrer_id'] or '---'}",
+                parse_mode="MarkdownV2"
+            )
+        except (ValueError, TypeError):
+            await q.message.reply_text("❌ معرّف غير صالح\\.")
 
-    elif q.data == "admin_settings":
-        p = get_setting("subscription_price")
-        r = get_setting("referral_reward")
-        m = get_setting("min_withdraw")
-        await q.message.reply_text(
-            f"⚙️ الإعدادات:\n"
-            f"- السعر: {p}\\$\n"
-            f"- العمولة: {r}\\$\n"
-            f"- الحد الأدنى: {m}\\$",
-            parse_mode="MarkdownV2"
-        )
-        return
+    elif action == "edit":
+        key_map = {"price": "subscription_price", "ref": "referral_reward", "min": "min_withdraw"}
+        key = key_map.get(id_val)
+        if key:
+            context.user_data["state"] = STATE_EDIT_SETTING + key
+            await q.message.reply_text(f"أدخل القيمة الجديدة لـ '{id_val}':")
 
-    elif q.data == "edit_price":
-        context.user_data["edit"] = "subscription_price"
-        await q.message.reply_text("أدخل السعر الجديد:")
-        return
-
-    elif q.data == "edit_ref":
-        context.user_data["edit"] = "referral_reward"
-        await q.message.reply_text("أدخل العمولة الجديدة:")
-        return
-
-    elif q.data == "edit_min":
-        context.user_data["edit"] = "min_withdraw"
-        await q.message.reply_text("أدخل الحد الأدنى الجديد:")
-        return
-
-    elif q.data == "broadcast":
-        context.user_data["broadcast"] = True
-        await q.message.reply_text("أرسل الرسالة الجماعية:")
-        return
-
-    elif q.data == "payment_methods":
-        cursor.execute("SELECT id, name FROM payment_methods")
-        methods = cursor.fetchall()
-        buttons = [[InlineKeyboardButton("➕ إضافة طريقة دفع", callback_data="add_payment")]]
-        for row in methods:
-            m_id = row["id"]
-            name = row["name"]
-            buttons.append([
-                InlineKeyboardButton("✏️ تعديل", callback_data=f"edit_pm_{m_id}"),
-                InlineKeyboardButton("🗑️ حذف", callback_data=f"del_pm_{m_id}")
-            ])
-            buttons.append([InlineKeyboardButton(f"💳 {name}", callback_data="cancel")])
-        buttons.append([InlineKeyboardButton("🔙 رجوع", callback_data="cancel")])
-        await q.message.reply_text(
-            "💳 طرق الدفع المتوفرة:" if methods else "💳 لا توجد طرق دفع مُضافة بعد\\.",
-            parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-        return
-
-    elif q.data == "add_payment":
-        context.user_data["add_payment"] = True
+    elif action == "add_payment" and id_val == "new":
+        context.user_data["state"] = STATE_ADD_PAYMENT_NAME
         await q.message.reply_text("✏️ أرسل اسم طريقة الدفع:")
-        return
 
-    elif q.data == "channel_links":
-        cursor.execute("SELECT id, link FROM channel_links")
-        links = cursor.fetchall()
-        buttons = [[InlineKeyboardButton("➕ إضافة روابط", callback_data="add_links_bulk")]]
-        for row in links:
-            lid = row["id"]
-            link = row["link"]
-            short = (link[:25] + "…") if len(link) > 25 else link
-            escaped_short = escape_markdown(short, version=2)
-            buttons.append([InlineKeyboardButton(f"🗑️ {escaped_short}", callback_data=f"del_link_{lid}")])
-        buttons.append([InlineKeyboardButton("🔙", callback_data="cancel")])
-        await q.message.reply_text("🔗 روابط القناة:", reply_markup=InlineKeyboardMarkup(buttons))
-        return
+    elif action == "edit_pm":
+        try:
+            m_id = int(id_val)
+            context.user_data["state"] = STATE_EDIT_PM + str(m_id)
+            await q.message.reply_text("أدخل الاسم الجديد:")
+        except (ValueError, TypeError):
+            await q.message.reply_text("❌ معرّف غير صالح\\.")
 
-    elif q.data == "add_links_bulk":
-        context.user_data["expecting_links"] = True
+    elif action == "del_pm":
+        await q.message.reply_text("⚠️ حذف الطريقة؟", reply_markup=confirm_menu("✅", "❌", f"confirm_del_pm:{id_val}", "cancel:op"))
+
+    elif action == "confirm_del_pm":
+        try:
+            m_id = int(id_val)
+            await safe_db_execute("DELETE FROM payment_methods WHERE id = %s", (m_id,))
+            await q.message.reply_text("✅ تم الحذف\\.", parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.error(f"Delete payment method failed: {e}")
+            await q.message.reply_text("❌ خطأ في الحذف\\.")
+
+    elif action == "add_links" and id_val == "bulk":
+        context.user_data["state"] = "add_links:bulk"
         await q.message.reply_text(
             "📎 أرسل جميع روابط القناة في رسالة واحدة \\(كل رابط في سطر\\):\n\n"
             "مثال:\n`https://t.me/channel1`\n`https://t.me/channel2`",
             parse_mode="MarkdownV2"
         )
-        return
 
-    elif q.data == "confirm_add_payment":
-        if "tmp_payment" not in context.user_data:
-            await q.message.edit_text("❌ بيانات مفقودة\\.", parse_mode="MarkdownV2")
-            return
-        name, barcode = context.user_data.pop("tmp_payment")
+    elif action == "del_link":
+        await q.message.reply_text("⚠️ حذف الرابط؟", reply_markup=confirm_menu("✅", "❌", f"confirm_del_link:{id_val}", "cancel:op"))
+
+    elif action == "confirm_del_link":
         try:
-            cursor.execute(
-                "INSERT INTO payment_methods (name, barcode) VALUES (%s, %s)",
-                (name, barcode)
-            )
-            conn.commit()
-            await q.message.edit_text("✅ تم الإضافة بنجاح\\!", parse_mode="MarkdownV2")
-        except Exception as e:
-            logger.error(f"DB error on add_payment: {e}")
-            await q.message.edit_text("❌ خطأ في الحفظ\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data == "cancel_add_payment":
-        context.user_data.pop("tmp_payment", None)
-        await q.message.edit_text("❌ تم الإلغاء\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data.startswith("del_link_"):
-        try:
-            lid = int(q.data.split("_")[2])
-            await q.message.reply_text(
-                "⚠️ حذف الرابط؟",
-                reply_markup=confirm_menu("✅", "❌", f"confirm_del_link_{lid}", "cancel")
-            )
-        except (ValueError, IndexError):
-            await q.message.reply_text("❌ طلب غير صالح\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data.startswith("confirm_del_link_"):
-        try:
-            lid = int(q.data.split("_")[3])
-            cursor.execute("DELETE FROM channel_links WHERE id = %s", (lid,))
-            conn.commit()
+            lid = int(id_val)
+            await safe_db_execute("DELETE FROM channel_links WHERE id = %s", (lid,))
             await q.message.reply_text("✅ تم الحذف\\.", parse_mode="MarkdownV2")
         except Exception as e:
-            logger.error(f"DB error on delete link: {e}")
-            await q.message.reply_text("❌ خطأ في الحذف\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data.startswith("del_pm_"):
-        try:
-            m_id = int(q.data.split("_")[2])
-            await q.message.reply_text(
-                "⚠️ حذف الطريقة؟",
-                reply_markup=confirm_menu("✅", "❌", f"confirm_del_pm_{m_id}", "cancel")
-            )
-        except (ValueError, IndexError):
-            await q.message.reply_text("❌ طلب غير صالح\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data.startswith("confirm_del_pm_"):
-        try:
-            m_id = int(q.data.split("_")[3])
-            cursor.execute("DELETE FROM payment_methods WHERE id = %s", (m_id,))
-            conn.commit()
-            await q.message.reply_text("✅ تم الحذف\\.", parse_mode="MarkdownV2")
-        except Exception as e:
-            logger.error(f"DB error on delete payment method: {e}")
-            await q.message.reply_text("❌ خطأ في الحذف\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data.startswith("edit_pm_"):
-        try:
-            m_id = int(q.data.split("_")[2])
-            context.user_data["edit_pm_id"] = m_id
-            await q.message.reply_text("أدخل الاسم الجديد:")
-        except (ValueError, IndexError):
-            await q.message.reply_text("❌ طلب غير صالح\\.", parse_mode="MarkdownV2")
-        return
-
-    elif q.data == "send_to_user":
-        context.user_data["awaiting_user_id"] = True
-        await q.message.reply_text("👤 أرسل معرف المستخدم \\(ID\\):", parse_mode="MarkdownV2")
-        return
-
-    elif q.data == "cancel":
-        keys_to_clear = [
-            "add_payment", "awaiting_payment_link", "new_payment_name", "tmp_payment",
-            "edit", "expecting_links", "withdraw_method", "withdraw_amount",
-            "withdraw_data_temp", "withdraw_method_temp", "awaiting_user_id", "target_user_id"
-        ]
-        for k in keys_to_clear:
-            context.user_data.pop(k, None)
-        await q.message.reply_text("❌ تم الإلغاء\\.", parse_mode="MarkdownV2")
-        return
-
+            logger.error(f"Delete link failed: {e}")
+            await q.message.reply_text("❌ خطأ في الحذف\\.")
 
 # ---------------- MESSAGES ----------------
 async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
-
-    uid = update.effective_user.id
     text = update.message.text.strip() if update.message.text else ""
+    state = context.user_data.get("state", STATE_IDLE)
+    uid = update.effective_user.id
 
-    # --- دعم المستخدم ---
-    if context.user_data.get("support"):
+    # --- دعم ---
+    if state == STATE_SUPPORT:
         for admin in ADMINS:
             try:
-                await context.bot.send_message(
-                    admin,
-                    f"📩 دعم من {uid}:\n{text}",
-                    parse_mode=None
-                )
+                await context.bot.send_message(admin, f"📩 دعم من {uid}:\n{text}")
             except Exception as e:
-                logger.warning(f"Failed to send support msg to admin {admin}: {e}")
-        context.user_data.pop("support", None)
+                logger.warning(f"Support msg to admin failed: {e}")
+        clean_user_data(context, ["state"])
         await update.message.reply_text("✅ تم الإرسال\\.", parse_mode="MarkdownV2")
         return
 
-    # --- إدخال معرف المستخدم (للرسالة الفردية) ---
-    if context.user_data.get("awaiting_user_id") and uid in ADMINS:
+    # --- إدخال معرف مستخدم (للرسالة الفردية) ---
+    if state == STATE_AWAITING_USER_ID:
         try:
             target_id = int(text.strip())
-            context.user_data["target_user_id"] = target_id
-            context.user_data.pop("awaiting_user_id", None)
-            await update.message.reply_text(
-                f"📨 أرسل الرسالة لـ `{target_id}`:",
-                parse_mode="MarkdownV2"
-            )
+            context.user_data.update({
+                "state": STATE_TARGET_MESSAGE,
+                "target_user_id": target_id
+            })
+            await update.message.reply_text(f"📨 أرسل الرسالة لـ `{target_id}`:", parse_mode="MarkdownV2")
         except ValueError:
             await update.message.reply_text("❌ معرف غير صالح\\. أدخل أرقامًا فقط\\.", parse_mode="MarkdownV2")
         return
 
     # --- إرسال رسالة لمستخدم محدد ---
-    if context.user_data.get("target_user_id") and uid in ADMINS:
-        target_id = context.user_data["target_user_id"]
+    if state == STATE_TARGET_MESSAGE:
+        target_id = context.user_data.get("target_user_id")
+        if not target_id:
+            clean_user_data(context, ["state", "target_user_id"])
+            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            return
         try:
-            escaped_text = escape_markdown(text, version=2)
             await context.bot.send_message(
                 target_id,
-                f"📩 **رسالة من الإدارة**:\n\n{escaped_text}",
+                f"📩 **رسالة من الإدارة**:\n\n{escape_markdown(text, version=2)}",
                 parse_mode="MarkdownV2"
             )
             await update.message.reply_text(f"✅ تم الإرسال إلى `{target_id}`\\.", parse_mode="MarkdownV2")
         except Exception as e:
-            err = "❌ فشل الإرسال\\. الأسباب:\n"
+            err = "❌ فشل الإرسال:\\n"
             if "bot was blocked" in str(e):
-                err += "• المستخدم حظر البوت\n"
+                err += "• المستخدم حظر البوت\\n"
             elif "chat not found" in str(e):
-                err += "• المعرف خاطئ أو لم يبدأ محادثة\n"
+                err += "• المعرف خاطئ أو لم يبدأ محادثة\\n"
             else:
-                err += f"• خطأ غير معروف: {type(e).__name__}"
-            logger.warning(f"Failed to send message to {target_id}: {e}")
+                err += f"• خطأ: {type(e).__name__}"
+            logger.warning(f"Message to {target_id} failed: {e}")
             await update.message.reply_text(err, parse_mode="MarkdownV2")
         finally:
-            context.user_data.pop("target_user_id", None)
+            clean_user_data(context, ["state", "target_user_id"])
         return
 
-    # --- بيانات السحب (من المستخدم) ---
-    if context.user_data.get("withdraw_method") in ["sham", "usdt"]:
-        method = context.user_data["withdraw_method"]
-        bal = context.user_data.get("withdraw_amount", 0)
-        data = text.strip()
+    # --- إدخال بيانات السحب ---
+    if state == STATE_WITHDRAW_DATA:
+        method = context.user_data.get("withdraw_method")
+        amount = context.user_data.get("amount", 0)
+        if not method or amount <= 0:
+            clean_user_data(context, ["state", "withdraw_method", "amount"])
+            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            return
 
-        # ✅ التحقق من الصحة
+        # تحقق من صحة البيانات
         if method == "sham":
-            if len(data) < 5 or " " in data or "HTTP" in data.upper():
+            if len(text) < 5 or " " in text or "HTTP" in text.upper():
                 await update.message.reply_text("❌ كود شام كاش غير صالح\\. أعد المحاولة\\.", parse_mode="MarkdownV2")
                 return
             label = "كود شام كاش"
         else:  # usdt
-            if not data.startswith("0x") or len(data) < 10:
+            if not text.startswith("0x") or len(text) < 10:
                 await update.message.reply_text("❌ محفظة USDT غير صالحة\\. يجب أن تبدأ بـ `0x`\\.", parse_mode="MarkdownV2")
                 return
             label = "محفظة USDT"
 
-        # ✅ تحقق من طلب معلق
-        cursor.execute("SELECT id FROM withdrawals WHERE user_id = %s AND status = 'PENDING'", (uid,))
-        if cursor.fetchone():
+        # تحقق من طلب معلق
+        row = await safe_db_fetchone(
+            "SELECT id FROM withdrawals WHERE user_id = %s AND status = 'PENDING'", (uid,)
+        )
+        if row:
+            clean_user_data(context, ["state", "withdraw_method", "amount"])
             await update.message.reply_text("⏳ لديك طلب سحب معلق\\. انتظر معالجته أولًا\\.", parse_mode="MarkdownV2")
-            context.user_data.pop("withdraw_method", None)
             return
 
-        # ✅ حفظ مؤقت
+        # حفظ مؤقت
         context.user_data.update({
-            "withdraw_data_temp": data,
-            "withdraw_method_temp": method
+            "temp_withdraw": {"method": method, "amount": amount, "data": text}
         })
-        context.user_data.pop("withdraw_method", None)
+        clean_user_data(context, ["state", "withdraw_method", "amount"])
 
         method_text = "شام كاش" if method == "sham" else "USDT \\(BEP20\\)"
-        escaped_data = escape_markdown(data, version=2)
         await update.message.reply_text(
             f"⚠️ تأكيد طلب السحب:\n"
-            f"💵 المبلغ: {bal}\\$\n"
+            f"💵 المبلغ: {amount}\\$\n"
             f"📌 الطريقة: {method_text}\n"
-            f"📋 {label}: `{escaped_data}`\n\n"
+            f"📋 {label}: `{escape_markdown(text, version=2)}`\n\n"
             f"هل تريد تأكيد الطلب؟",
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ تأكيد", callback_data="confirm_withdraw")],
-                [InlineKeyboardButton("❌ تعديل", callback_data="edit_withdraw_data")]
+                [InlineKeyboardButton("✅ تأكيد", callback_data="confirm:withdraw")],
+                [InlineKeyboardButton("❌ تعديل", callback_data="edit:withdraw_data")]
             ])
         )
         return
 
+    # --- صورة إثبات الدفع ---
+    if state == STATE_AWAITING_PAYMENT and update.message.photo:
+        price = (await safe_db_fetchone("SELECT value FROM settings WHERE key = 'subscription_price'"))["value"]
+        method_id = context.user_data.get("payment_method_id")
+        if not method_id:
+            clean_user_data(context, ["state", "payment_method_id"])
+            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            return
+        file_id = update.message.photo[-1].file_id
+        try:
+            row = await safe_db_fetchone("""
+                INSERT INTO payments (user_id, amount, proof, status, payment_method_id)
+                VALUES (%s, %s, %s, 'PENDING', %s)
+                RETURNING id
+            """, (uid, price, file_id, method_id))
+            pid = row["id"]
+            clean_user_data(context, ["state", "payment_method_id"])
+            await update.message.reply_text("📩 تم استلام صورة إشعار الدفع\\.", parse_mode="MarkdownV2")
+            # إشعار الأدمن
+            for admin in ADMINS:
+                try:
+                    await context.bot.send_photo(
+                        admin, photo=file_id,
+                        caption=f"طلب اشتراك جديد\\nالمستخدم: {uid}",
+                        parse_mode="MarkdownV2",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅", callback_data=f"approve:{pid}")],
+                            [InlineKeyboardButton("❌", callback_data=f"reject:{pid}")]
+                        ])
+                    )
+                except Exception as e:
+                    logger.warning(f"Payment photo to admin failed: {e}")
+        except Exception as e:
+            logger.error(f"Payment insert failed: {e}")
+            await update.message.reply_text("❌ خطأ في تسجيل الدفع\\.", parse_mode="MarkdownV2")
+        return
+
+    # --- إضافة طريقة دفع: الاسم ---
+    if state == STATE_ADD_PAYMENT_NAME:
+        context.user_data.update({
+            "state": STATE_ADD_PAYMENT_LINK,
+            "new_payment_name": text
+        })
+        await update.message.reply_text(f"✅ الاسم: *{escape_markdown(text, version=2)}*\n🔗 أرسل الرابط:", parse_mode="MarkdownV2")
+        return
+
+    # --- إضافة طريقة دفع: الرابط ---
+    if state == STATE_ADD_PAYMENT_LINK:
+        name = context.user_data.get("new_payment_name")
+        if not name:
+            clean_user_data(context, ["state", "new_payment_name"])
+            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            return
+        try:
+            await safe_db_execute(
+                "INSERT INTO payment_methods (name, barcode) VALUES (%s, %s)",
+                (name, text)
+            )
+            clean_user_data(context, ["state", "new_payment_name"])
+            await update.message.reply_text("✅ تم الإضافة بنجاح\\!", parse_mode="MarkdownV2")
+        except Exception as e:
+            logger.error(f"Add payment method failed: {e}")
+            await update.message.reply_text("❌ خطأ في الحفظ\\.", parse_mode="MarkdownV2")
+        return
+
     # --- إضافة روابط دفعة واحدة ---
-    if context.user_data.get("expecting_links") and uid in ADMINS:
-        context.user_data.pop("expecting_links", None)
+    if state == "add_links:bulk":
+        clean_user_data(context, ["state"])
         lines = text.strip().splitlines()
         links = [line.strip() for line in lines if line.strip().startswith("http")]
         if not links:
@@ -666,186 +689,107 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         added = 0
         for link in links:
             try:
-                cursor.execute("""
+                row = await safe_db_fetchone("""
                     INSERT INTO channel_links (link)
                     VALUES (%s)
                     ON CONFLICT (link) DO NOTHING
                     RETURNING id
                 """, (link,))
-                if cursor.fetchone():
+                if row:
                     added += 1
             except Exception as e:
-                logger.error(f"Failed to insert link '{link}': {e}")
-        conn.commit()
+                logger.error(f"Link insert failed: {link} | {e}")
         await update.message.reply_text(f"✅ تم حفظ {added} رابط\\.", parse_mode="MarkdownV2")
         return
 
-    # --- صورة إثبات الدفع ---
-    if context.user_data.get("awaiting_payment") and update.message.photo:
-        price = get_setting("subscription_price")
-        method_id = context.user_data.get("payment_method_id")
-        if method_id is None:
-            await update.message.reply_text("❌ حدث خطأ\\. يرجى المحاولة من جديد\\.", parse_mode="MarkdownV2")
-            context.user_data.pop("awaiting_payment", None)
-            return
-        file_id = update.message.photo[-1].file_id
-        try:
-            cursor.execute("""
-                INSERT INTO payments (user_id, amount, proof, status, payment_method_id)
-                VALUES (%s, %s, %s, 'PENDING', %s)
-                RETURNING id
-            """, (uid, price, file_id, method_id))
-            row = cursor.fetchone()
-            pid = row["id"] if row else None
-            if not pid:
-                raise Exception("No payment ID returned")
-            conn.commit()
-        except Exception as e:
-            logger.error(f"DB error on payment insert: {e}")
-            await update.message.reply_text("❌ خطأ في تسجيل الدفع\\.", parse_mode="MarkdownV2")
-            return
-
-        context.user_data.pop("awaiting_payment", None)
-        context.user_data.pop("payment_method_id", None)
-        await update.message.reply_text("📩 تم استلام صورة إشعار الدفع\\.", parse_mode="MarkdownV2")
-
-        for admin in ADMINS:
-            try:
-                await context.bot.send_photo(
-                    admin, photo=file_id,
-                    caption=f"طلب اشتراك جديد\\nالمستخدم: {uid}",
-                    parse_mode="MarkdownV2",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅", callback_data=f"approve_{pid}")],
-                        [InlineKeyboardButton("❌", callback_data=f"reject_{pid}")]
-                    ])
-                )
-            except Exception as e:
-                logger.warning(f"Failed to notify admin {admin} on new payment: {e}")
-        return
-
-    # --- إضافة طريقة دفع: الاسم ---
-    if context.user_data.get("add_payment") and uid in ADMINS:
-        context.user_data["new_payment_name"] = text
-        context.user_data["awaiting_payment_link"] = True
-        context.user_data.pop("add_payment", None)
-        escaped_name = escape_markdown(text, version=2)
-        await update.message.reply_text(
-            f"✅ الاسم: *{escaped_name}*\n🔗 أرسل الرابط:",
-            parse_mode="MarkdownV2"
-        )
-        return
-
-    # --- إضافة طريقة دفع: الرابط ---
-    if context.user_data.get("awaiting_payment_link") and uid in ADMINS:
-        name = context.user_data["new_payment_name"]
-        context.user_data["tmp_payment"] = (name, text)
-        context.user_data.pop("awaiting_payment_link", None)
-        context.user_data.pop("new_payment_name", None)
-        escaped_name = escape_markdown(name, version=2)
-        escaped_link = escape_markdown(text, version=2)
-        await update.message.reply_text(
-            f"📛: `{escaped_name}`\n📎: `{escaped_link}`",
-            parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ تأكيد", callback_data="confirm_add_payment")],
-                [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_add_payment")]
-            ])
-        )
-        return
-
     # --- الموافقة على الاشتراك (أدخل رقم العملية) ---
-    if "approve_pid" in context.user_data and uid in ADMINS:
-        pid = context.user_data["approve_pid"]
+    if state == STATE_APPROVE_PID:
+        pid = context.user_data.get("approve_pid")
+        if not pid:
+            clean_user_data(context, ["state", "approve_pid"])
+            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            return
         try:
-            cursor.execute("SELECT user_id FROM payments WHERE id = %s AND status = 'PENDING'", (pid,))
-            row = cursor.fetchone()
+            row = await safe_db_fetchone(
+                "SELECT user_id FROM payments WHERE id = %s AND status = 'PENDING'", (pid,)
+            )
             if not row:
+                clean_user_data(context, ["state", "approve_pid"])
                 await update.message.reply_text("❌ الطلب غير موجود أو مُعالج مسبقًا\\.", parse_mode="MarkdownV2")
-                context.user_data.pop("approve_pid", None)
                 return
             user_id = row["user_id"]
-
-            cursor.execute("SELECT id, link FROM channel_links ORDER BY id LIMIT 1")
-            link_row = cursor.fetchone()
+            link_row = await safe_db_fetchone("SELECT id, link FROM channel_links ORDER BY id LIMIT 1")
             if not link_row:
                 await update.message.reply_text("❌ لا توجد روابط\\. أضف روابط أولًا\\.", parse_mode="MarkdownV2")
                 return
             link_id = link_row["id"]
             link = link_row["link"]
-
             end_date = "2026-12-31"
-            cursor.execute(
+            await safe_db_execute(
                 "UPDATE payments SET status = 'APPROVED', transaction_id = %s WHERE id = %s",
                 (text, pid)
             )
-            cursor.execute(
+            await safe_db_execute(
                 "UPDATE users SET subscription_active = 1, subscription_end = %s WHERE telegram_id = %s",
                 (end_date, user_id)
             )
-
-            cursor.execute("SELECT referrer_id FROM users WHERE telegram_id = %s", (user_id,))
-            ref_row = cursor.fetchone()
+            # مكافأة المُحيل
+            ref_row = await safe_db_fetchone("SELECT referrer_id FROM users WHERE telegram_id = %s", (user_id,))
             ref = ref_row["referrer_id"] if ref_row else None
             if ref:
-                cursor.execute("SELECT subscription_active FROM users WHERE telegram_id = %s", (ref,))
-                ref_active_row = cursor.fetchone()
-                if ref_active_row and ref_active_row["subscription_active"] == 1:
-                    reward = get_setting("referral_reward")
-                    cursor.execute(
+                ref_active = await safe_db_fetchone(
+                    "SELECT subscription_active FROM users WHERE telegram_id = %s", (ref,)
+                )
+                if ref_active and ref_active["subscription_active"] == 1:
+                    reward = (await safe_db_fetchone(
+                        "SELECT value FROM settings WHERE key = 'referral_reward'"
+                    ))["value"]
+                    await safe_db_execute(
                         "UPDATE users SET referral_balance = referral_balance + %s WHERE telegram_id = %s",
                         (reward, ref)
                     )
-
-            cursor.execute("DELETE FROM channel_links WHERE id = %s", (link_id,))
-            conn.commit()
-
+            await safe_db_execute("DELETE FROM channel_links WHERE id = %s", (link_id,))
             try:
                 await context.bot.send_message(
                     user_id,
                     f"🎉 اشتراكك مفعل\\!\nالرابط:\n{escape_markdown(link, version=2)}",
                     parse_mode="MarkdownV2"
                 )
-            except Exception as e:
-                logger.warning(f"Failed to send link to user {user_id}: {e}")
-
+            except:
+                pass
+            clean_user_data(context, ["state", "approve_pid"])
             await update.message.reply_text(f"✅ تم تفعيل الاشتراك لـ {user_id}\\.", parse_mode="MarkdownV2")
-            context.user_data.pop("approve_pid", None)
-            return
         except Exception as e:
-            logger.error(f"Error in approve: {e}")
+            logger.error(f"Approve failed: {e}")
+            clean_user_data(context, ["state", "approve_pid"])
             await update.message.reply_text("❌ خطأ في المعالجة\\.", parse_mode="MarkdownV2")
-            context.user_data.pop("approve_pid", None)
-            return
+        return
 
     # --- صرف السحب (أدخل رقم العملية) ---
-    if "pay_wid" in context.user_data and uid in ADMINS:
-        wid = context.user_data["pay_wid"]
+    if state == STATE_PAY_WID:
+        wid = context.user_data.get("pay_wid")
+        if not wid:
+            clean_user_data(context, ["state", "pay_wid"])
+            await update.message.reply_text("❌ خطأ داخلي\\. أعد المحاولة\\.")
+            return
         try:
-            cursor.execute("""
-                SELECT user_id, amount, sham_cash_link, method
-                FROM withdrawals
-                WHERE id = %s
-            """, (wid,))
-            row = cursor.fetchone()
+            row = await safe_db_fetchone(
+                "SELECT user_id, amount, sham_cash_link, method FROM withdrawals WHERE id = %s", (wid,)
+            )
             if not row:
+                clean_user_data(context, ["state", "pay_wid"])
                 await update.message.reply_text("❌ طلب السحب غير موجود\\.", parse_mode="MarkdownV2")
-                context.user_data.pop("pay_wid", None)
                 return
             u = row["user_id"]
             amt = row["amount"]
             data = row["sham_cash_link"]
             method_type = row["method"]
-            method = "شام كاش" if method_type == "sham" else "USDT \\(BEP20\\)"
-
-            cursor.execute("UPDATE users SET referral_balance = 0 WHERE telegram_id = %s", (u,))
-            cursor.execute(
+            await safe_db_execute("UPDATE users SET referral_balance = 0 WHERE telegram_id = %s", (u,))
+            await safe_db_execute(
                 "UPDATE withdrawals SET status = 'PAID', transaction_id = %s WHERE id = %s",
                 (text, wid)
             )
-            conn.commit()
-
-            escaped_data = escape_markdown(data or "", version=2)
+            method = "شام كاش" if method_type == "sham" else "USDT \\(BEP20\\)"
             try:
                 await context.bot.send_message(
                     u,
@@ -853,145 +797,89 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"💵 المبلغ: {amt}\\$\n"
                     f"🆔 رقم العملية: {escape_markdown(text, version=2)}\n"
                     f"📌 الطريقة: {method}\n"
-                    f"📋 البيانات: `{escaped_data}`",
+                    f"📋 البيانات: `{escape_markdown(data or '', version=2)}`",
                     parse_mode="MarkdownV2"
                 )
             except Exception as e:
-                logger.warning(f"Failed to notify user {u} on withdrawal payout: {e}")
-
+                logger.warning(f"User notification failed on payout: {e}")
+            clean_user_data(context, ["state", "pay_wid"])
             await update.message.reply_text(f"✅ تم صرف {amt}\\$ لـ {u}\\.", parse_mode="MarkdownV2")
-            context.user_data.pop("pay_wid", None)
-            return
         except Exception as e:
-            logger.error(f"Error in pay_wid: {e}")
+            logger.error(f"Payout failed: {e}")
+            clean_user_data(context, ["state", "pay_wid"])
             await update.message.reply_text("❌ خطأ في المعالجة\\.", parse_mode="MarkdownV2")
-            context.user_data.pop("pay_wid", None)
-            return
+        return
 
     # --- تعديل الإعدادات ---
-    if "edit" in context.user_data and uid in ADMINS:
-        key = context.user_data["edit"]
+    if state.startswith(STATE_EDIT_SETTING):
+        key = state[len(STATE_EDIT_SETTING):]
         try:
             val = float(text) if key != "subscription_price" else int(text)
-            set_setting(key, val)
-            context.user_data.pop("edit")
+            await safe_db_execute(
+                "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (key, str(val))
+            )
+            clean_user_data(context, ["state"])
             await update.message.reply_text("✅ تم التعديل\\.", parse_mode="MarkdownV2")
         except ValueError:
             await update.message.reply_text("❌ أدخل رقمًا صحيحًا\\.", parse_mode="MarkdownV2")
         return
 
     # --- تعديل طريقة دفع ---
-    if "edit_pm_id" in context.user_data and uid in ADMINS:
-        m_id = context.user_data["edit_pm_id"]
+    if state.startswith(STATE_EDIT_PM):
         try:
-            cursor.execute("UPDATE payment_methods SET name = %s WHERE id = %s", (text, m_id))
-            conn.commit()
-            context.user_data.pop("edit_pm_id")
+            m_id = int(state[len(STATE_EDIT_PM):])
+            await safe_db_execute("UPDATE payment_methods SET name = %s WHERE id = %s", (text, m_id))
+            clean_user_data(context, ["state"])
             await update.message.reply_text("✅ تم التعديل\\.", parse_mode="MarkdownV2")
         except Exception as e:
-            logger.error(f"DB error on edit payment method: {e}")
+            logger.error(f"Edit payment method failed: {e}")
+            clean_user_data(context, ["state"])
             await update.message.reply_text("❌ خطأ في الحفظ\\.", parse_mode="MarkdownV2")
         return
 
-    # --- رسالة جماعية ---
-    if context.user_data.get("broadcast") and uid in ADMINS:
-        cursor.execute("SELECT telegram_id FROM users")
-        users = cursor.fetchall()
-        success = 0
-        for row in users:
-            try:
-                await context.bot.send_message(row["telegram_id"], text)
-                success += 1
-            except Exception as e:
-                logger.debug(f"Broadcast failed to {row['telegram_id']}: {e}")
-        context.user_data.pop("broadcast", None)
-        await update.message.reply_text(f"✅ تم الإرسال إلى {success} مستخدم\\.", parse_mode="MarkdownV2")
-        return
-
-
-# ---------------- HELPER: تأكيد السحب ----------------
-async def _handle_confirm_withdraw(q, context, uid):
-    data = context.user_data.get("withdraw_data_temp")
-    method = context.user_data.get("withdraw_method_temp")
-    bal = context.user_data.get("withdraw_amount", 0)
-
-    if not data or not method:
-        await q.message.edit_text("❌ بيانات مفقودة\\.", parse_mode="MarkdownV2")
-        return
-
-    try:
-        cursor.execute("SELECT referral_balance FROM users WHERE telegram_id = %s", (uid,))
-        row = cursor.fetchone()
-        current_bal = row["referral_balance"] if row else 0
-        if bal != current_bal:
-            await q.message.edit_text("❌ تغير الرصيد\\. أعد المحاولة\\.", parse_mode="MarkdownV2")
+    # --- بث جماعي ---
+    if state == STATE_BROADCAST:
+        clean_user_data(context, ["state"])
+        rows = await safe_db_fetchall("SELECT telegram_id FROM users")
+        user_ids = [r["telegram_id"] for r in rows]
+        total = len(user_ids)
+        if total == 0:
+            await update.message.reply_text("📭 لا يوجد مستخدمون\\.", parse_mode="MarkdownV2")
             return
-
-        method_type = "sham" if method == "sham" else "usdt"
-        cursor.execute("""
-            INSERT INTO withdrawals (user_id, amount, sham_cash_link, method, status)
-            VALUES (%s, %s, %s, %s, 'PENDING')
-            RETURNING id
-        """, (uid, bal, data, method_type))
-        row = cursor.fetchone()
-        wid = row["id"] if row else None
-        if not wid:
-            raise Exception("No withdrawal ID returned")
-        conn.commit()
-
-        # ✅ تنظيف الـ user_data
-        context.user_data.pop("withdraw_data_temp", None)
-        context.user_data.pop("withdraw_method_temp", None)
-        context.user_data.pop("withdraw_amount", None)
-
-        # ✅ إعلام المستخدم
-        await q.message.edit_text(f"✅ تم إرسال طلب السحب #{wid} للأدمن\\.", parse_mode="MarkdownV2")
-
-        # ✅ إعلام الأدمن
-        method_text = "شام كاش" if method == "sham" else "USDT \\(BEP20\\)"
-        escaped_data = escape_markdown(data, version=2)
-        for admin in ADMINS:
-            try:
-                await context.bot.send_message(
-                    admin,
-                    f"💸 طلب سحب جديد #{wid}\n"
-                    f"👤 المستخدم: {uid}\n"
-                    f"💵 المبلغ: {bal}\\$\n"
-                    f"📌 الطريقة: {method_text}\n"
-                    f"📋 البيانات: `{escaped_data}`",
-                    parse_mode="MarkdownV2",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ تأكيد", callback_data=f"pay_{wid}")],
-                        [InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_w_{wid}")],
-                        [InlineKeyboardButton("ℹ️ استعلام", callback_data=f"inquiry_{uid}")]
-                    ])
+        success = 0
+        for i in range(0, total, BATCH_SIZE):
+            batch = user_ids[i:i + BATCH_SIZE]
+            tasks = [context.bot.send_message(uid, text, parse_mode=None) for uid in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            success += sum(1 for r in results if not isinstance(r, Exception))
+            # توقف عند فشل > 30%
+            if i > 0 and success < (i + len(batch)) * 0.7:
+                await update.message.reply_text(
+                    f"⚠️ توقف مؤقت: نسبة فشل عالية ({success}/{i + len(batch)})\\.",
+                    parse_mode="MarkdownV2"
                 )
-            except Exception as e:
-                logger.warning(f"Failed to notify admin {admin} on new withdrawal: {e}")
+                break
+        await update.message.reply_text(f"✅ تم الإرسال إلى {success}/{total} مستخدم\\.", parse_mode="MarkdownV2")
+        return
 
-    except Exception as e:
-        logger.error(f"Error in _handle_confirm_withdraw: {e}")
-        await q.message.edit_text("❌ خطأ في معالجة الطلب\\.", parse_mode="MarkdownV2")
-
+# ---------------- COMMANDS ----------------
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id in ADMINS:
+        await update.message.reply_text("🛂 لوحة الأدمن", reply_markup=admin_menu())
 
 # ---------------- MAIN ----------------
 def main():
+    init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_error_handler(error_handler)
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", lambda u, c:
-        u.message.reply_text("🛂 الأدمن", reply_markup=admin_menu()) if u.effective_user.id in ADMINS else None))
+    app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, messages))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, messages))
-
-    logger.info("✅ البوت جاهز...")
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
-
+    logger.info("✅ Jetoor Bot is running...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
