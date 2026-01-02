@@ -1,111 +1,154 @@
+# database.py
 import os
-import psycopg
-from psycopg.rows import dict_row
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import asyncio
+import logging
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+logger = logging.getLogger(__name__)
 
-conn = psycopg.connect(
-    DATABASE_URL,
-    row_factory=dict_row,
-    autocommit=False
-)
+# ✅ التأكد من وجود DATABASE_URL
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("❌ DATABASE_URL is not set!")
 
-cursor = conn.cursor()
+_conn = None
 
+def get_connection():
+    global _conn
+    if _conn is None or _conn.closed:
+        try:
+            _conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            logger.info("✅ DB connection established.")
+        except Exception as e:
+            logger.critical(f"❌ Failed to connect to DB: {e}")
+            raise
+    return _conn
 
-# ---------------- INIT DB ----------------
+async def safe_db_execute(query: str, params: tuple = None):
+    """تنفيذ استعلام دون إرجاع (INSERT/UPDATE/DELETE)"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            conn.commit()
+    except psycopg2.OperationalError:
+        # إعادة الاتصال وإعادة المحاولة مرة واحدة
+        _conn.close()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            conn.commit()
+    except Exception as e:
+        logger.error(f"DB execute error: {query} | {e}")
+        raise
+
+async def safe_db_fetchone(query: str, params: tuple = None):
+    """جلب صف واحد"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            return cur.fetchone()
+    except psycopg2.OperationalError:
+        _conn.close()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            return cur.fetchone()
+    except Exception as e:
+        logger.error(f"DB fetchone error: {query} | {e}")
+        raise
+
+async def safe_db_fetchall(query: str, params: tuple = None):
+    """جلب جميع الصفوف"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            return cur.fetchall()
+    except psycopg2.OperationalError:
+        _conn.close()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            return cur.fetchall()
+    except Exception as e:
+        logger.error(f"DB fetchall error: {query} | {e}")
+        raise
+
 def init_db():
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        telegram_id BIGINT UNIQUE,
-        username TEXT,
-        referrer_id BIGINT,
-        referral_balance FLOAT DEFAULT 0,
-        subscription_active INTEGER DEFAULT 0,
-        subscription_end DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS payments (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT,
-        amount FLOAT,
-        proof TEXT,
-        status TEXT,
-        transaction_id TEXT,
-        payment_method_id INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS withdrawals (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT,
-        amount FLOAT,
-        sham_cash_link TEXT,
-        method TEXT,
-        status TEXT,
-        transaction_id TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS payment_methods (
-        id SERIAL PRIMARY KEY,
-        name TEXT,
-        barcode TEXT
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS channel_links (
-        id SERIAL PRIMARY KEY,
-        link TEXT UNIQUE
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-    )
-    """)
-
-    # قيم افتراضية
-    defaults = {
-        "subscription_price": "10",
-        "referral_reward": "2",
-        "min_withdraw": "5"
-    }
-
-    for k, v in defaults.items():
-        cursor.execute(
-            "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
-            (k, v)
-        )
-
-    conn.commit()
-
-
-# ---------------- SETTINGS ----------------
-def get_setting(key):
-    cursor.execute("SELECT value FROM settings WHERE key=%s", (key,))
-    row = cursor.fetchone()
-    return float(row["value"]) if row else 0
-
-
-def set_setting(key, value):
-    cursor.execute(
-        """
-        INSERT INTO settings (key, value)
-        VALUES (%s, %s)
-        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value
-        """,
-        (key, str(value))
-    )
-    conn.commit()
+    """تهيئة الجداول (يُنادى مرة واحدة في البداية)"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # users
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    telegram_id BIGINT UNIQUE NOT NULL,
+                    username TEXT,
+                    referrer_id BIGINT,
+                    referral_balance DECIMAL(10,2) DEFAULT 0,
+                    subscription_active BOOLEAN DEFAULT FALSE,
+                    subscription_end DATE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+            """)
+            # settings
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+            """)
+            # defaults
+            defaults = [
+                ("subscription_price", "5"),
+                ("referral_reward", "1"),
+                ("min_withdraw", "2")
+            ]
+            for k, v in defaults:
+                cur.execute("""
+                    INSERT INTO settings (key, value)
+                    VALUES (%s, %s)
+                    ON CONFLICT (key) DO NOTHING;
+                """, (k, v))
+            # payments, withdrawals, etc. (مثل السابق)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS payment_methods (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    barcode TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS payments (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    amount DECIMAL(10,2) NOT NULL,
+                    proof TEXT,
+                    status TEXT DEFAULT 'PENDING',
+                    payment_method_id INTEGER,
+                    transaction_id TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS withdrawals (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    amount DECIMAL(10,2) NOT NULL,
+                    sham_cash_link TEXT,
+                    method TEXT DEFAULT 'sham',
+                    status TEXT DEFAULT 'PENDING',
+                    transaction_id TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS channel_links (
+                    id SERIAL PRIMARY KEY,
+                    link TEXT UNIQUE NOT NULL
+                );
+            """)
+            conn.commit()
+            logger.info("✅ Database initialized.")
+    except Exception as e:
+        conn.rollback()
+        logger.critical(f"❌ init_db failed: {e}")
+        raise
