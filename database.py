@@ -7,7 +7,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ✅ التأكد من وجود DATABASE_URL
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("❌ DATABASE_URL is not set!")
@@ -26,14 +25,12 @@ def get_connection():
     return _conn
 
 async def safe_db_execute(query: str, params: tuple = None):
-    """تنفيذ استعلام دون إرجاع (INSERT/UPDATE/DELETE)"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(query, params or ())
             conn.commit()
     except psycopg2.OperationalError:
-        # إعادة الاتصال وإعادة المحاولة مرة واحدة
         _conn.close()
         conn = get_connection()
         with conn.cursor() as cur:
@@ -44,7 +41,6 @@ async def safe_db_execute(query: str, params: tuple = None):
         raise
 
 async def safe_db_fetchone(query: str, params: tuple = None):
-    """جلب صف واحد"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -61,7 +57,6 @@ async def safe_db_fetchone(query: str, params: tuple = None):
         raise
 
 async def safe_db_fetchall(query: str, params: tuple = None):
-    """جلب جميع الصفوف"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -78,7 +73,6 @@ async def safe_db_fetchall(query: str, params: tuple = None):
         raise
 
 def init_db():
-    """تهيئة الجداول (يُنادى مرة واحدة في البداية)"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -102,25 +96,22 @@ def init_db():
                     value TEXT NOT NULL
                 );
             """)
-            # defaults
-            defaults = [
-                ("subscription_price", "5"),
-                ("referral_reward", "1"),
-                ("min_withdraw", "2")
-            ]
+            defaults = [("subscription_price", "5"), ("referral_reward", "1"), ("min_withdraw", "2")]
             for k, v in defaults:
-                cur.execute("""
-                    INSERT INTO settings (key, value)
-                    VALUES (%s, %s)
-                    ON CONFLICT (key) DO NOTHING;
-                """, (k, v))
-            # payments, withdrawals, etc. (مثل السابق)
+                cur.execute(
+                    "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING;",
+                    (k, v)
+                )
+            # payment_methods
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS payment_methods (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     barcode TEXT NOT NULL
                 );
+            """)
+            # payments
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id SERIAL PRIMARY KEY,
                     user_id BIGINT NOT NULL,
@@ -131,6 +122,9 @@ def init_db():
                     transaction_id TEXT,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
+            """)
+            # withdrawals
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS withdrawals (
                     id SERIAL PRIMARY KEY,
                     user_id BIGINT NOT NULL,
@@ -141,6 +135,9 @@ def init_db():
                     transaction_id TEXT,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
+            """)
+            # channel_links
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS channel_links (
                     id SERIAL PRIMARY KEY,
                     link TEXT UNIQUE NOT NULL
