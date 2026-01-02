@@ -6,7 +6,6 @@ from telegram.ext import (
 )
 from telegram.ext import Application
 from database import init_db, safe_db_execute, safe_db_fetchone, safe_db_fetchall
-from telegram.helpers import escape_markdown
 import logging
 import os
 import asyncio
@@ -35,6 +34,15 @@ STATE_APPROVE_PID = "admin:approve:pid"
 STATE_PAY_WID = "admin:pay:wid"
 STATE_EDIT_SETTING = "admin:edit:"
 STATE_EDIT_PM = "admin:edit_pm:"
+
+
+def escape_html(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+    )
+
 
 # ---------------- UTILS ----------------
 def parse_callback(data: str):
@@ -885,6 +893,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
